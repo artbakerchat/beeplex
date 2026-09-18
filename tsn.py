@@ -2,11 +2,11 @@ import time
 from playwright.sync_api import sync_playwright
 
 def track_tsn_sports():
-    print("Starting TSN NFL, F1, & CFL Tracker... Press Ctrl+C to stop.")
+    print("Starting TSN NFL, F1, CFL, & La Liga Tracker... Press Ctrl+C to stop.")
     
     try:
         while True:
-            print(f"\n--- Checking TSN for NFL, F1, & CFL at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
+            print(f"\n--- Checking TSN for NFL, F1, CFL, & La Liga at {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
             
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=True)
@@ -26,8 +26,11 @@ def track_tsn_sports():
                 seen_texts = set()
                 found_count = 0
                 
-                # Expanded keywords list including CFL
-                target_keywords = ["nfl", "f1", "formula 1", "grand prix", "cfl"]
+                # Expanded keywords list including La Liga and related soccer terms
+                target_keywords = [
+                    "nfl", "f1", "formula 1", "grand prix", "cfl", 
+                    "la liga", "spanish soccer", "real madrid", "barcelona"
+                ]
                 
                 for card in cards:
                     try:
@@ -49,7 +52,7 @@ def track_tsn_sports():
                         continue
                             
                 if found_count == 0:
-                    print("No active or upcoming NFL, F1, or CFL events found on this pass.")
+                    print("No active or upcoming NFL, F1, CFL, or La Liga events found on this pass.")
                     
                 browser.close()
             

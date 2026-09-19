@@ -1,6 +1,19 @@
+from pathlib import Path
+from datetime import date, datetime
+
 import pandas as pd
 from docx import Document
 from pptx import Presentation
+from openpyxl import load_workbook
+
+OUTPUT_DIR = Path(__file__).resolve().parent / "music"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+GENERATED_DATE = date.today()
+DISPLAY_DATE = GENERATED_DATE.strftime("%B %d, %Y").replace(" 0", " ")
+GENERATED_AT = datetime.now()
+DOCUMENT_TITLE = f"Music Session Transcript Insights — {DISPLAY_DATE}"
+EXCEL_TITLE = f"Session Action Matrix — {DISPLAY_DATE}"
+PRESENTATION_TITLE = f"Studio Creative Review — {DISPLAY_DATE}"
 
 # Simulated text transcript data pulled from a session log
 transcript_notes = [
@@ -11,7 +24,11 @@ transcript_notes = [
 
 # 1. Word Document: Comprehensive Session Log
 doc = Document()
-doc.add_heading("Music Session Transcript Insights", 0)
+doc.core_properties.title = DOCUMENT_TITLE
+doc.core_properties.created = GENERATED_AT
+doc.core_properties.modified = GENERATED_AT
+doc.add_heading(DOCUMENT_TITLE, 0)
+doc.add_paragraph(f"Generated: {DISPLAY_DATE}")
 doc.add_paragraph("Extracted notes and decisions from spoken studio dialogue.")
 
 for note in transcript_notes:
@@ -19,17 +36,26 @@ for note in transcript_notes:
     p.add_run(f"[{note['Timestamp']}] {note['Category']}: ").bold = True
     p.add_run(note['Feedback'])
 
-doc.save("Session_Transcript_Summary.docx")
+doc.save(OUTPUT_DIR / "Session_Transcript_Summary.docx")
 
 # 2. Excel Spreadsheet: Categorized Action Tracking
 df = pd.DataFrame(transcript_notes)
-df.to_excel("Session_Action_Matrix.xlsx", index=False)
+excel_path = OUTPUT_DIR / "Session_Action_Matrix.xlsx"
+df.to_excel(excel_path, index=False)
+workbook = load_workbook(excel_path)
+workbook.properties.title = EXCEL_TITLE
+workbook.properties.created = GENERATED_AT
+workbook.properties.modified = GENERATED_AT
+workbook.save(excel_path)
 
 # 3. PowerPoint: Creative Direction Deck
 prs = Presentation()
+prs.core_properties.title = PRESENTATION_TITLE
+prs.core_properties.created = GENERATED_AT
+prs.core_properties.modified = GENERATED_AT
 slide = prs.slides.add_slide(prs.slide_layouts[0])
-slide.shapes.title.text = "Studio Creative Review"
-slide.placeholders[1].text = "Key Decisions from Spoken Transcripts"
+slide.shapes.title.text = PRESENTATION_TITLE
+slide.placeholders[1].text = f"Key Decisions from Spoken Transcripts — {DISPLAY_DATE}"
 
 bullet_slide = prs.slides.add_slide(prs.slide_layouts[1])
 bullet_slide.shapes.title.text = "Action Items & Flow Adjustments"
@@ -40,6 +66,6 @@ for note in transcript_notes:
     p = tf.add_paragraph()
     p.text = f"{note['Category']}: {note['Feedback']}"
 
-prs.save("Session_Creative_Direction.pptx")
+prs.save(OUTPUT_DIR / "Session_Creative_Direction.pptx")
 
 print("Generated Office suite documents successfully using text transcripts!")

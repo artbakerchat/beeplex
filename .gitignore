@@ -1,0 +1,13 @@
+venv/
+
+# API keys live here - never commit this file
+.env
+
+# Generated reports - may contain real transcripts on live runs, never commit
+family/
+
+# Mic recordings made by simulator/record.py - your voice, never commit
+simulator/recordings/
+
+__pycache__/
+*.pyc

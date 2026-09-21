@@ -295,8 +295,89 @@ def engagement_signals(parts):
     return {"score": score, "label": label, "signals": signals}
 
 
+def score_breakdown(parts, events, llm=_LLM_NOT_FETCHED):
+    """Full numeric scoring breakdown for one conversation.
+
+    Returns a JSON-serializable dict with every domain's score, label and
+    sub-signals plus the blended Engagement and Forward Motion, the
+    substantive-turn count, and per-speaker talk shares. ``_engagement_cells``
+    renders the report cells from this; ``dashboard.py`` renders the
+    coaching dashboard from it. Empty transcript -> everything None.
+    """
+    if not parts:
+        return {"det": None, "energy": None, "fm": None, "llm": None,
+                "engagement": None, "fm_blended": None,
+                "n_substantive": 0, "speaker_shares": None}
+    if llm is _LLM_NOT_FETCHED:
+        llm = llm_engagement(parts)
+    det = engagement_signals(parts)
+    temporal = temporal_scores(events)
+    energy = temporal["energy"]
+    fm = temporal["forward_motion"]
+
+    domains = [det["score"]]
+    if energy is not None:
+        domains.append(energy["score"])
+    llm_eng = llm.get("engagement") if llm else None
+    if llm_eng is not None:
+        domains.append(llm_eng)
+    eng_score = round(sum(domains) / len(domains), 1)
+    engagement = {"score": eng_score,
+                  "label": "High" if eng_score >= 7
+                  else ("Moderate" if eng_score >= 4 else "Low")}
+
+    fm_domains = []
+    if fm is not None:
+        fm_domains.append(fm["score"])
+    llm_prog = llm.get("progress") if llm else None
+    if llm_prog is not None:
+        fm_domains.append(llm_prog)
+    fm_blended = None
+    if fm_domains:
+        s = round(sum(fm_domains) / len(fm_domains), 1)
+        fm_blended = {"score": s,
+                      "label": "High" if s >= 7
+                      else ("Moderate" if s >= 4 else "Low")}
+
+    llm_out = None
+    if llm:
+        llm_out = {k: llm.get(k) for k in ("engagement", "rationale", "tone",
+                                           "tone_label", "progress",
+                                           "progress_label")}
+
+    substantive = [(s, t) for s, t in parts if _is_substantive(t)]
+    shares = None
+    speakers = [s for s, _ in substantive if s]
+    if len(set(speakers)) >= 2:
+        counts = {}
+        for s, t in substantive:
+            if s:
+                counts[s] = counts.get(s, 0) + len(t.split())
+        total = sum(counts.values()) or 1
+        shares = {s: round(c / total, 3)
+                  for s, c in sorted(counts.items(), key=lambda kv: -kv[1])}
+
+    return {
+        "det": {"score": det["score"], "label": det["label"],
+                "signals": det["signals"]},
+        "energy": ({"score": energy["score"], "label": energy["label"],
+                    "signals": energy["signals"]} if energy is not None
+                   else None),
+        "fm": ({"score": fm["score"], "label": fm["label"],
+                "signals": fm["signals"]} if fm is not None else None),
+        "llm": llm_out,
+        "engagement": engagement,
+        "fm_blended": fm_blended,
+        "n_substantive": len(substantive),
+        "speaker_shares": shares,
+    }
+
+
 def _engagement_cells(parts, events, llm=_LLM_NOT_FETCHED):
     """Return (engagement_cell, tone_cell, forward_motion_cell) for a row.
+
+    Renders the display cells from score_breakdown() - the numeric source
+    of truth both the reports and the coaching dashboard share.
 
     Engagement is the mean of the available scoring domains - deterministic
     (structure), temporal energy (motion), and Gemini (meaning) when
@@ -311,46 +392,31 @@ def _engagement_cells(parts, events, llm=_LLM_NOT_FETCHED):
     ``llm`` is a pre-fetched llm_engagement() result (or None). When omitted,
     a single-shot llm_engagement() call is made - the one-recording path.
     """
-    if not parts:
+    bd = score_breakdown(parts, events, llm)
+    if bd["engagement"] is None:
         return "—", "—", "—"
-    eng = engagement_signals(parts)
-    temporal = temporal_scores(events)
-    if llm is _LLM_NOT_FETCHED:
-        llm = llm_engagement(parts)
-    domains = [eng["score"]]
-    if temporal["energy"] is not None:
-        domains.append(temporal["energy"]["score"])
-    if llm and llm.get("engagement") is not None:
-        domains.append(llm["engagement"])
-    score = round(sum(domains) / len(domains), 1)
-    label = "High" if score >= 7 else ("Moderate" if score >= 4 else "Low")
-    engagement_cell = f"{label} ({score})"
-    if llm and llm.get("rationale"):
-        engagement_cell += f" — {llm['rationale']}"
-    tone = llm.get("tone") if llm else None
-    tone_label = (llm.get("tone_label") or "").strip() if llm else ""
+    e = bd["engagement"]
+    engagement_cell = f"{e['label']} ({e['score']})"
+    rationale = (bd["llm"] or {}).get("rationale")
+    if rationale:
+        engagement_cell += f" — {rationale}"
+    l = bd["llm"] or {}
+    tone = l.get("tone")
+    tone_label = (l.get("tone_label") or "").strip()
     if tone is None:
         tone_cell = "—"
     elif tone_label:
         tone_cell = f"{tone_label} ({tone}/10)"
     else:
         tone_cell = f"{tone}/10"
-    fm = temporal["forward_motion"]
-    fm_domains = []
-    if fm is not None:
-        fm_domains.append(fm["score"])
-    llm_progress = llm.get("progress") if llm else None
-    if llm_progress is not None:
-        fm_domains.append(llm_progress)
-    if fm_domains:
-        fm_score = round(sum(fm_domains) / len(fm_domains), 1)
-        fm_label = "High" if fm_score >= 7 else ("Moderate" if fm_score >= 4 else "Low")
-        llm_plabel = (llm.get("progress_label") or "").strip() if llm else ""
-        forward_motion_cell = f"{fm_label} ({fm_score})"
-        if llm_plabel:
-            forward_motion_cell += f" [{llm_plabel}]"
-    else:
+    fmb = bd["fm_blended"]
+    if fmb is None:
         forward_motion_cell = "—"
+    else:
+        forward_motion_cell = f"{fmb['label']} ({fmb['score']})"
+        plabel = (l.get("progress_label") or "").strip()
+        if plabel:
+            forward_motion_cell += f" [{plabel}]"
     return engagement_cell, tone_cell, forward_motion_cell
 
 
@@ -461,20 +527,32 @@ def fetch_report_data(limit=10):
     {"mode": "live"|"mock", "detail": ...}.
     """
     if MOCK_FORCED:
-        return mock_rows(), {
+        rows, info = mock_rows(), {
             "mode": "mock",
             "detail": "BEEX_MOCK=1 - forced mock data",
         }
-    if not cli_available():
-        return mock_rows(), {
+    elif not cli_available():
+        rows, info = mock_rows(), {
             "mode": "mock",
             "detail": f"'{BEE_CMD}' not found - install with: npm install -g @beeai/cli",
         }
-    if not is_authenticated():
-        return mock_rows(), {
+    elif not is_authenticated():
+        rows, info = mock_rows(), {
             "mode": "mock",
             "detail": "Bee CLI not authenticated - run `bee login` (or `bee login --no-wait`)",
         }
+    else:
+        rows, info = _fetch_live(limit)
+    # Mock runs regenerate the dashboard from history (demo banner, no
+    # new history entry); the live path records the run itself.
+    if info["mode"] == "mock":
+        from dashboard import record_run
+        record_run([], info)
+    return rows, info
+
+
+def _fetch_live(limit):
+    """Live path of fetch_report_data: CLI list/get, batch LLM, dashboard."""
 
     conversations = list_conversations(limit=limit)
 
@@ -489,11 +567,36 @@ def fetch_report_data(limit=10):
     llm_map = llm_engagement_batch(
         [(str(i), parts) for i, (_, _, parts, _) in enumerate(prepared)]
     )
-    rows = [
-        _row_from_source(source, parts, events, llm_map.get(str(i)), conv_id)
+    scored = [
+        (conv_id, source, parts, events, llm_map.get(str(i)))
         for i, (conv_id, source, parts, events) in enumerate(prepared)
     ]
-    rows = [r for r in rows if r["Session_Title"]]
+    pairs = [
+        (_row_from_source(source, parts, events, llm, conv_id),
+         (conv_id, source, parts, events, llm))
+        for conv_id, source, parts, events, llm in scored
+    ]
+    pairs = [(row, meta) for row, meta in pairs if row["Session_Title"]]
+    rows = [row for row, _ in pairs]
+
+    # Coaching dashboard: append this run's scores to the local trend
+    # history and regenerate family/dashboard.html. Automatic on every
+    # run; mock mode regenerates the page from history without appending.
+    from dashboard import record_run
+    record_run(
+        [
+            {
+                "id": str(conv_id),
+                "title": row["Session_Title"],
+                "date": (str(row["Recording_Date"])
+                         if row.get("Recording_Date") else None),
+                "parts": parts,
+                "breakdown": score_breakdown(parts, events, llm),
+            }
+            for row, (conv_id, source, parts, events, llm) in pairs
+        ],
+        {"mode": "live"},
+    )
     return rows, {
         "mode": "live",
         "detail": f"{len(rows)} conversations via Bee CLI",

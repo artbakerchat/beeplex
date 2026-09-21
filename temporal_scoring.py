@@ -101,6 +101,24 @@ def effective_words(text):
     return sum(1 for d in discounted if not d)
 
 
+def top_repeats(parts, limit=3):
+    """Most-looped phrases across a conversation: [(phrase, count)].
+
+    Aggregates phrase_repeats() over the substantive turns, keeping each
+    phrase's highest single-turn count. Used by the coaching dashboard to
+    show the user exactly what they kept saying on loop.
+    """
+    from bee_fetcher import _is_substantive
+
+    agg = {}
+    for _, text in parts:
+        if not _is_substantive(text):
+            continue
+        for phrase, count in phrase_repeats(text).items():
+            agg[phrase] = max(agg.get(phrase, 0), count)
+    return sorted(agg.items(), key=lambda kv: -kv[1])[:limit]
+
+
 def circularity(text):
     """0..1: share of a turn's words lost to repeated phrases.
 

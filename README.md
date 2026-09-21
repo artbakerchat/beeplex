@@ -61,6 +61,30 @@ going-in-circles can't be caught by word counting, so that half is the
 LLM's job. When timestamps are missing the temporal domain abstains and
 the other domains carry the score.
 
+## Coaching dashboard (auto-generated)
+
+Every run also writes `family/dashboard.html` — a local coaching dashboard
+that opens in your browser. No data leaves your machine. It shows:
+
+- **This run, ranked** — your conversations ordered by engagement, each
+  with the one-line reason it sits where it does, plus a trend arrow
+  (▲/▼/—) against its previous runs
+- **Coaching cards** — per conversation: the three domain scores and every
+  sub-signal as a bar, plain-language tips derived from the signals
+  ("One voice is doing 80% of the talking — draw the other person out
+  with a direct question", "Looping detected — 'as I was saying' (3×).
+  Say it once and move on."), a trend sparkline, and the LLM's one-line
+  rationale when a key is set
+- **Weight lab** — sliders that re-blend the three domains live, so you
+  can feel how the engagement score is built (equal weights reproduce the
+  report scores; uncheck the LLM box to see the no-key blend)
+
+**Trend history:** each live run appends its per-conversation scores to
+`family/history.json` — scores and signal values only, never transcripts
+(capped at 200 runs; delete the file to start fresh). Mock runs regenerate
+the page from history without appending. The tips are deterministic and
+free — the same signals that built the score say how to move it.
+
 ## Simulator (no device needed)
 
 `simulator/` is a fake `bee` CLI so you can test the real live path without

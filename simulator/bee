@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""Simulated `bee` CLI for testing beeplex without a Bee device.
+
+Drop this directory on your PATH and the repo runs in live mode against
+scripted conversations instead of real Bee data:
+
+    PATH="$PWD/simulator:$PATH" python3 family.py
+
+Emulates the documented CLI surface:
+    bee me --json
+    bee conversations list [--limit N] [--cursor C] --json
+    bee conversations get <id> --json
+    bee conversations transcript <id> [--since <epochMs>] --json
+
+Payloads follow the official bee-skill docs: utterances verbatim with
+speaker and timestamps (epoch ms), conversation summaries, start times.
+
+Scenarios live in conversations.json next to this file (timestamps are
+relative "minutes_ago" so dates stay fresh). Add your own conversations
+there to test new shapes.
+
+Env knobs:
+    SIM_BEE_FAIL_AUTH=1   make `bee me` fail -> tests the mock fallback
+    SIM_BEE_EMPTY=1       return zero conversations -> tests the empty path
+"""
+import json
+import os
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+NOW_MS = int(time.time() * 1000)
+MIN = 60_000
+
+
+def load():
+    with open(os.path.join(HERE, "conversations.json"), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def materialize(raw):
+    """Convert relative timestamps to epoch ms like the real API.
+
+    The first utterance is anchored at its "minutes_ago"; later ones are
+    spaced by estimated speech time (words / 150 wpm) plus the utterance's
+    "pause_s" (seconds of silence after it before the next turn, default
+    1.0). Author "pause_s" per utterance in conversations.json to script a
+    scenario's rhythm: rapid-fire argument, thoughtful debate, slow
+    monologue. Real Bee utterances land seconds apart, not minutes.
+    """
+    convs = []
+    for c in raw:
+        utterances = []
+        ts = None
+        for u in c["utterances"]:
+            if ts is None:
+                ts = NOW_MS - int(u["minutes_ago"] * MIN)
+            utterances.append({
+                "speaker": u.get("speaker"),
+                "text": u["text"],
+                "timestamp": int(ts),
+            })
+            words = len(u["text"].split())
+            try:
+                pause_s = float(u.get("pause_s", 1.0))
+            except (TypeError, ValueError):
+                pause_s = 1.0
+            ts += words / 150.0 * 60_000 + max(0.0, pause_s) * 1000
+        convs.append({
+            "id": c["id"],
+            "title": c["title"],
+            "summary": c["summary"],
+            "start_time": NOW_MS - int(c["minutes_ago"] * MIN),
+            "utterances": utterances,
+        })
+    return convs
+
+
+def main(argv):
+    args = [a for a in argv if a != "--json"]
+    if os.environ.get("SIM_BEE_FAIL_AUTH") == "1" and args[:1] == ["me"]:
+        sys.stderr.write("sim-bee: not logged in (SIM_BEE_FAIL_AUTH=1)\n")
+        return 1
+
+    if args[:1] == ["me"]:
+        print(json.dumps({"user": {"name": "Sim Owner"}, "authenticated": True}))
+        return 0
+
+    convs = [] if os.environ.get("SIM_BEE_EMPTY") == "1" else materialize(load())
+
+    if args[:2] == ["conversations", "list"]:
+        limit = 10
+        if "--limit" in args:
+            limit = int(args[args.index("--limit") + 1])
+        items = [
+            {k: c[k] for k in ("id", "title", "summary", "start_time")}
+            for c in convs[:limit]
+        ]
+        print(json.dumps({"conversations": items, "next_cursor": None}))
+        return 0
+
+    if args[:2] == ["conversations", "get"] and len(args) > 2:
+        conv = next((c for c in convs if c["id"] == args[2]), None)
+        if conv is None:
+            sys.stderr.write(f"sim-bee: unknown conversation {args[2]}\n")
+            return 1
+        print(json.dumps({"conversation": conv}))
+        return 0
+
+    if args[:2] == ["conversations", "transcript"] and len(args) > 2:
+        conv = next((c for c in convs if c["id"] == args[2]), None)
+        if conv is None:
+            sys.stderr.write(f"sim-bee: unknown conversation {args[2]}\n")
+            return 1
+        utterances = conv["utterances"]
+        if "--since" in args:
+            since = int(args[args.index("--since") + 1])
+            utterances = [u for u in utterances if u["timestamp"] >= since]
+        print(json.dumps({"utterances": utterances}))
+        return 0
+
+    sys.stderr.write(f"sim-bee: unsupported command: {args}\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

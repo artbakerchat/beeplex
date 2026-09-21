@@ -65,6 +65,11 @@ the per-utterance timestamps Bee provides — no API calls, no key:
   restates one fight in fresh words scores novelty ~1.0 while going
   nowhere, and spinning is the signal that catches it
 
+Repetition is not automatically treated as failure. The scorer also looks
+for productive-progress markers such as explanations, examples, contrasts,
+and conclusions, which soften the spinning penalty. This helps music and
+sports discussions where revisiting a subject can still add analysis.
+
 Pace + responsiveness form temporal **energy**, blended into Engagement as
 a third domain alongside the deterministic and LLM scores (mean of
 whichever domains are available). Circularity + novelty form lexical

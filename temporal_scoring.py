@@ -161,6 +161,21 @@ _CIRCLING_PHRASES = (
     "just admit",
 )
 
+# Repetition is not automatically a failure: music, sport, teaching, and
+# analysis often revisit an idea while adding detail or drawing a conclusion.
+# These lightweight markers are evidence that a turn is doing that work.
+_BUILDING_PHRASES = (
+    "because", "for example", "for instance", "however", "but", "although",
+    "which means", "that means", "so", "therefore", "as a result",
+    "on the other hand", "in contrast", "the evidence", "the reason",
+    "then", "next", "finally", "we should", "let's", "lets", "i think",
+    "my point", "in conclusion",
+)
+_BUILDING_RES = [
+    re.compile(r"\b" + re.escape(phrase).replace(r"\ ", r"\s+") + r"\b")
+    for phrase in _BUILDING_PHRASES
+]
+
 
 def _has_absolutist(text):
     low = text.lower()
@@ -170,6 +185,27 @@ def _has_absolutist(text):
 def _has_circling_marker(text):
     low = text.lower()
     return any(phrase in low for phrase in _CIRCLING_PHRASES)
+
+
+def productive_progress(parts):
+    """Return 0..1 evidence that repeated topics are being developed.
+
+    This is deliberately a small structural signal, not a claim that marker
+    words prove progress.  It prevents conversations with productive
+    repetition (for example, sports analysis or music discussion) from being
+    penalized as heavily as an exchange that only repeats its position.
+    """
+    from bee_fetcher import _is_substantive
+
+    turns = [t.lower() for _, t in parts if _is_substantive(t)]
+    if len(turns) < 2:
+        return {"score": 0.0, "signals": {}}
+    marked = sum(
+        1 for text in turns
+        if any(pattern.search(text) for pattern in _BUILDING_RES)
+    )
+    score = round(marked / len(turns), 3)
+    return {"score": score, "signals": {"building_markers": score}}
 
 
 def spinning(parts):
@@ -235,8 +271,12 @@ def novelty(parts):
 
 
 def forward_motion(parts):
-    """Forward-motion score 0..10 from circularity + novelty, discounted
-    by spinning.
+    """Forward-motion score 0..10 from circularity + novelty.
+
+    Structural spinning is discounted when turns also contain evidence of
+    building: explanations, contrasts, examples, or conclusions.  This keeps
+    productive back-and-forth from being treated like an argument stuck on a
+    loop.  The LLM progress score remains the semantic backstop when enabled.
 
     The "is this going somewhere" axis, separate from engagement's
     "how heated is this" axis. Lexical motion (fresh phrases, no verbatim
@@ -261,12 +301,19 @@ def forward_motion(parts):
     else:
         return None
     spin = spinning(parts)
-    score = round(10.0 * base * (1.0 - 0.6 * spin["score"]), 1)
+    progress = productive_progress(parts)
+    raw_spin = spin["score"]
+    # Building evidence can reduce the structural penalty by up to half, but
+    # never erases it entirely.  Marker words are only a conservative hint.
+    effective_spin = raw_spin * (1.0 - 0.5 * progress["score"])
+    score = round(10.0 * base * (1.0 - 0.6 * effective_spin), 1)
     label = "High" if score >= 7 else ("Moderate" if score >= 4 else "Low")
     signals = {
         "circularity": round(circ, 3),
         "novelty": nov,
-        "spinning": spin["score"],
+        "spinning": round(effective_spin, 3),
+        "raw_spinning": raw_spin,
+        "productive_progress": progress["score"],
     }
     signals.update(spin["signals"])
     return {"score": score, "label": label, "signals": signals}

@@ -604,7 +604,24 @@ def _fetch_live(limit):
 
 
 if __name__ == "__main__":
-    rows, info = fetch_report_data(limit=3)
-    print(f"mode={info['mode']} ({info['detail']})")
-    for row in rows:
-        print(f"- {row['Recording_Date']} | {row['Session_Title']}")
+    import argparse
+
+    ap = argparse.ArgumentParser(
+        description="beeplex - Bee conversation reports (default) or "
+                    "clinical encounter extraction (--clinical).")
+    ap.add_argument("--clinical", action="store_true",
+                    help="Clinical mode: doctor-worn Bee encounter -> "
+                         "one-page clinical summary per conversation "
+                         "(extraction only, no engagement scoring).")
+    ap.add_argument("--limit", type=int, default=3,
+                    help="Max conversations to process (default: 3).")
+    args = ap.parse_args()
+
+    if args.clinical:
+        from clinical_extraction import run_clinical
+        run_clinical(limit=args.limit)
+    else:
+        rows, info = fetch_report_data(limit=args.limit)
+        print(f"mode={info['mode']} ({info['detail']})")
+        for row in rows:
+            print(f"- {row['Recording_Date']} | {row['Session_Title']}")

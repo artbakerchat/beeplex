@@ -108,6 +108,37 @@ that opens in your browser. No data leaves your machine. It shows:
 the page from history without appending. The tips are deterministic and
 free — the same signals that built the score say how to move it.
 
+## Clinical mode (doctor-worn Bee)
+
+A second mode for a different job: the doctor wears the Bee during patient
+encounters, and instead of scoring how the conversation *felt*, the tool
+extracts what the doctor needs — reason for visit, what changed, what the
+patient is worried about, what was ordered. Two or three handoff bullets,
+not a rubric.
+
+    python3 bee_fetcher.py --clinical
+
+`clinical_extraction.py` runs a deterministic pass over each transcript
+(heuristic doctor/patient role detection, symptom spotting with
+onset/change/severity markers, patient questions, plan items like
+prescriptions, referrals, tests, follow-ups) and writes a one-page
+**Clinical Encounter Summary** (`.docx`) per conversation into `family/`.
+With an LLM configured, the same Gemini → Bedrock Nova chain used by
+`llm_scoring.py` refines the handoff into two or three plain sentences —
+one API call for the whole run. Without it, the deterministic layer stands
+alone and nothing leaves the machine.
+
+Try it without hardware — the simulator ships a scripted doctor-patient
+visit (`sim_doctor_visit`):
+
+    PATH="simulator:$PATH" python3 bee_fetcher.py --clinical
+
+Privacy: deterministic mode sends nothing anywhere. The LLM pass sends
+transcript text to the configured provider. Summaries land in `family/`,
+which is gitignored — never commit real patient transcripts. This is a
+hackathon demo aid, not a medical device: review every summary before
+filing.
+
 ## Simulator (no device needed)
 
 `simulator/` is a fake `bee` CLI so you can test the real live path without
@@ -121,8 +152,9 @@ Run the whole pipeline against it:
 
 That's `./simulator/run.sh` = `PATH="simulator:$PATH" python family.py` — the
 fetcher sees a `bee` binary, authenticates, and runs in live mode against the
-six scripted scenarios (heated argument, balanced debate, monologue,
-backchannel ping-pong, short Q&A, unlabeled transcript). Add your own
+seven scripted scenarios (heated argument, balanced debate, monologue,
+backchannel ping-pong, short Q&A, unlabeled transcript, doctor-patient
+visit). Add your own
 scenarios to `conversations.json` (timestamps are relative `minutes_ago`, so
 dates stay fresh). Each utterance accepts an optional `pause_s` — seconds of
 silence after it before the next turn — so a scenario can script its rhythm

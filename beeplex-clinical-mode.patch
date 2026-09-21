@@ -1,0 +1,585 @@
+# beeplex clinical mode - apply onto commit 1375b79 ("spin") or later
+# From the repo root: git apply beeplex-clinical-mode.patch
+#
+diff --git a/README.md b/README.md
+index 112b542..e8890bd 100644
+--- a/README.md
++++ b/README.md
+@@ -108,6 +108,37 @@ that opens in your browser. No data leaves your machine. It shows:
+ the page from history without appending. The tips are deterministic and
+ free — the same signals that built the score say how to move it.
+ 
++## Clinical mode (doctor-worn Bee)
++
++A second mode for a different job: the doctor wears the Bee during patient
++encounters, and instead of scoring how the conversation *felt*, the tool
++extracts what the doctor needs — reason for visit, what changed, what the
++patient is worried about, what was ordered. Two or three handoff bullets,
++not a rubric.
++
++    python3 bee_fetcher.py --clinical
++
++`clinical_extraction.py` runs a deterministic pass over each transcript
++(heuristic doctor/patient role detection, symptom spotting with
++onset/change/severity markers, patient questions, plan items like
++prescriptions, referrals, tests, follow-ups) and writes a one-page
++**Clinical Encounter Summary** (`.docx`) per conversation into `family/`.
++With an LLM configured, the same Gemini → Bedrock Nova chain used by
++`llm_scoring.py` refines the handoff into two or three plain sentences —
++one API call for the whole run. Without it, the deterministic layer stands
++alone and nothing leaves the machine.
++
++Try it without hardware — the simulator ships a scripted doctor-patient
++visit (`sim_doctor_visit`):
++
++    PATH="simulator:$PATH" python3 bee_fetcher.py --clinical
++
++Privacy: deterministic mode sends nothing anywhere. The LLM pass sends
++transcript text to the configured provider. Summaries land in `family/`,
++which is gitignored — never commit real patient transcripts. This is a
++hackathon demo aid, not a medical device: review every summary before
++filing.
++
+ ## Simulator (no device needed)
+ 
+ `simulator/` is a fake `bee` CLI so you can test the real live path without
+@@ -121,8 +152,9 @@ Run the whole pipeline against it:
+ 
+ That's `./simulator/run.sh` = `PATH="simulator:$PATH" python family.py` — the
+ fetcher sees a `bee` binary, authenticates, and runs in live mode against the
+-six scripted scenarios (heated argument, balanced debate, monologue,
+-backchannel ping-pong, short Q&A, unlabeled transcript). Add your own
++seven scripted scenarios (heated argument, balanced debate, monologue,
++backchannel ping-pong, short Q&A, unlabeled transcript, doctor-patient
++visit). Add your own
+ scenarios to `conversations.json` (timestamps are relative `minutes_ago`, so
+ dates stay fresh). Each utterance accepts an optional `pause_s` — seconds of
+ silence after it before the next turn — so a scenario can script its rhythm
+diff --git a/bee_fetcher.py b/bee_fetcher.py
+index ff6becb..9c1cf97 100644
+--- a/bee_fetcher.py
++++ b/bee_fetcher.py
+@@ -604,7 +604,24 @@ def _fetch_live(limit):
+ 
+ 
+ if __name__ == "__main__":
+-    rows, info = fetch_report_data(limit=3)
+-    print(f"mode={info['mode']} ({info['detail']})")
+-    for row in rows:
+-        print(f"- {row['Recording_Date']} | {row['Session_Title']}")
++    import argparse
++
++    ap = argparse.ArgumentParser(
++        description="beeplex - Bee conversation reports (default) or "
++                    "clinical encounter extraction (--clinical).")
++    ap.add_argument("--clinical", action="store_true",
++                    help="Clinical mode: doctor-worn Bee encounter -> "
++                         "one-page clinical summary per conversation "
++                         "(extraction only, no engagement scoring).")
++    ap.add_argument("--limit", type=int, default=3,
++                    help="Max conversations to process (default: 3).")
++    args = ap.parse_args()
++
++    if args.clinical:
++        from clinical_extraction import run_clinical
++        run_clinical(limit=args.limit)
++    else:
++        rows, info = fetch_report_data(limit=args.limit)
++        print(f"mode={info['mode']} ({info['detail']})")
++        for row in rows:
++            print(f"- {row['Recording_Date']} | {row['Session_Title']}")
+diff --git a/clinical_extraction.py b/clinical_extraction.py
+new file mode 100644
+index 0000000..120493b
+--- /dev/null
++++ b/clinical_extraction.py
+@@ -0,0 +1,481 @@
++"""Clinical extraction mode for beeplex.
++
++Scenario: a doctor wears the Bee during patient encounters. The point is
++not to score how the conversation *felt* (see bee_fetcher.engagement_signals)
++but to pull out what the doctor actually needs: the reason for the visit,
++what changed, what the patient is worried about, and what was ordered.
++Two or three bullets that get fed forward - never a rubric, never a row in
++a database nobody reads.
++
++Two layers, same philosophy as the engagement pipeline:
++  deterministic - always runs, nothing leaves the machine. Heuristic
++      speaker-role detection (doctor vs patient), symptom spotting with
++      onset / change / severity markers, patient questions, and plan items
++      (prescriptions, referrals, tests, follow-ups).
++  LLM (optional) - Gemini first, then Bedrock Nova, reusing the
++      llm_scoring provider chain. Returns structured clinical JSON plus a
++      two-to-three sentence handoff the doctor can read in ten seconds.
++
++Privacy: deterministic mode sends nothing anywhere. The LLM pass sends
++transcript text to the configured provider - the same tradeoff as
++llm_scoring. Summaries land in family/, which is gitignored: never commit
++real patient transcripts.
++
++This is a hackathon demo aid, not a medical device. Deterministic output
++is heuristic and the LLM can misread - review every summary before filing.
++"""
++
++import json
++import re
++from datetime import date
++from pathlib import Path
++
++from docx import Document
++
++from bee_fetcher import _is_substantive
++from llm_scoring import (
++    API_KEY,
++    _bedrock_post,
++    _gemini_post,
++    _transcript_text,
++    available as llm_available,
++)
++
++# ---------------------------------------------------------------------------
++# Deterministic extraction
++# ---------------------------------------------------------------------------
++
++# Visit-shaped language. The doctor asks the clinical questions and issues
++# the orders; the patient describes what they feel and what worries them.
++DOCTOR_CUES = [
++    r"what brings you in",
++    r"how can i help",
++    r"how long has",
++    r"how long have",
++    r"when did (this|it|that) start",
++    r"have you (had|been|noticed|tried)",
++    r"are you taking",
++    r"any (pain|swelling|fever|nausea|dizziness|bleeding|numbness)",
++    r"does it hurt when",
++    r"on a scale of",
++    r"i('m| am) going to (prescribe|order|refer|send you)",
++    r"i('d| will) like to (order|refer|prescribe)",
++    r"let's (get|run|order|check|schedule|try)",
++    r"we('ll| will) (run|order|schedule|get)",
++    r"come back (in|if|when)",
++    r"follow up",
++    r"see you in",
++]
++
++PATIENT_CUES = [
++    r"\bi (feel|felt|have|had|notice|noticed|get|got)\b",
++    r"\bit hurts\b",
++    r"\bmy \w+ (hurts?|aches?|is sore|is swollen)\b",
++    r"\bi('m| am) worried\b",
++    r"\bcould this be\b",
++    r"\bdo i (need|have to)\b",
++]
++
++SYMPTOM_WORDS = [
++    "pain", "ache", "aching", "sore", "hurt", "hurts", "tender",
++    "nausea", "nauseous", "vomit", "vomiting",
++    "dizzy", "dizziness", "lightheaded",
++    "fever", "chills", "cough", "headache", "migraine",
++    "fatigue", "tired", "exhausted", "weakness",
++    "swelling", "swollen", "swell", "rash", "itch", "itchy",
++    "numb", "numbness", "tingling", "cramp", "cramps",
++    "shortness of breath", "wheezing", "chest", "palpitations",
++    "bleeding", "bruise", "bruising", "stiff", "stiffness",
++    # common inflections the \b...\b whole-word match would otherwise miss
++    "swelled", "aches", "hurting",
++]
++
++_ONSET = re.compile(
++    r"\bfor (?:about |around )?(\w+(?: \w+)?) "
++    r"(days?|weeks?|months?|hours?|years?)\b"
++    r"|\bsince (\w+)\b"
++    r"|\bstarted\b",
++    re.IGNORECASE,
++)
++_CHANGE = re.compile(
++    r"\b(worse|worsening|better|improving|improved|spreading|spread|"
++    r"new|gone away|resolved|came back|returned|flare[\s-]?ups?)\b",
++    re.IGNORECASE,
++)
++_SEVERITY = re.compile(
++    r"\b(\d{1,2})\s*(?:/|out of)\s*10\b"
++    r"|\b(severe|mild|moderate|unbearable|excruciating)\b",
++    re.IGNORECASE,
++)
++_PLAN = re.compile(
++    r"\b(prescrib\w*|prescription|refer(?:ral)?|blood ?work|blood tests?|"
++    r"x-?ray|mri|ultrasound|scan|follow.?up|come back|appointment|"
++    r"schedul\w+|physio(?:therapy)?|surgery|\d+\s*mg\b|ibuprofen|"
++    r"antibiotics?)\b",
++    re.IGNORECASE,
++)
++
++
++def detect_roles(parts):
++    """Guess {speaker: 'doctor'|'patient'} from visit-shaped language.
++
++    The speaker with the strongest doctor-cue signal wins; everyone else is
++    the patient. Returns {} when there is no usable signal (fewer than two
++    speakers, or nobody sounds like either role) - extraction still runs,
++    just without role attribution.
++    """
++    speakers = [s for s, _ in parts if s]
++    uniq = list(dict.fromkeys(speakers))
++    if len(uniq) < 2:
++        return {}
++    score = {sp: 0.0 for sp in uniq}
++    for sp in uniq:
++        turns = [t for s, t in parts if s == sp]
++        for t in turns:
++            for pat in DOCTOR_CUES:
++                if re.search(pat, t, re.IGNORECASE):
++                    score[sp] += 2.0
++            for pat in PATIENT_CUES:
++                if re.search(pat, t, re.IGNORECASE):
++                    score[sp] -= 2.0
++            if t.rstrip().endswith("?"):
++                score[sp] += 0.5  # in a visit, the questioner is usually the doctor
++    best = max(uniq, key=lambda sp: score[sp])
++    if score[best] <= 0:
++        return {}
++    return {sp: ("doctor" if sp == best else "patient") for sp in uniq}
++
++
++def _symptom_hits(text):
++    low = text.lower()
++    return [
++        w for w in SYMPTOM_WORDS
++        if re.search(r"\b" + re.escape(w) + r"\b", low)
++    ]
++
++
++def _trim(text, n=140):
++    text = " ".join(text.split())
++    return text if len(text) <= n else text[: n - 1].rstrip() + "…"
++
++
++def extract_clinical(parts):
++    """Deterministic clinical extraction from [(speaker, text)].
++
++    Returns {"roles", "chief_complaint", "symptoms", "patient_concerns",
++    "plan", "handoff"}. ``handoff`` is three short bullets - the whole
++    point of this mode: the two or three things worth feeding forward.
++    """
++    substantive = [(s, t) for s, t in parts if _is_substantive(t)]
++    roles = detect_roles(parts)
++
++    def is_patient(s):
++        return roles.get(s, "patient") == "patient"
++
++    def is_doctor(s):
++        return roles.get(s) == "doctor"
++
++    symptoms = []
++    for s, t in substantive:
++        # When roles are known, symptoms come from the patient: the doctor's
++        # screening questions ("any swelling?") are not reported symptoms.
++        if roles and not is_patient(s):
++            continue
++        hits = _symptom_hits(t)
++        change = _CHANGE.search(t)
++        if not hits:
++            # Change marker without a named symptom ("definitely worse after
++            # my shifts") belongs to the most recent symptom entry.
++            if change and symptoms and not symptoms[-1]["change"]:
++                symptoms[-1]["change"] = change.group(1)
++            continue
++        onset = _ONSET.search(t)
++        severity = _SEVERITY.search(t)
++        symptoms.append({
++            "text": _trim(t),
++            "symptoms": hits,
++            "onset": onset.group(0) if onset else None,
++            "change": change.group(1) if change else None,
++            "severity": severity.group(0) if severity else None,
++        })
++    symptoms = symptoms[:8]
++
++    patient_turns = [t for s, t in substantive if is_patient(s)]
++    complaint_src = (
++        next((t for t in patient_turns if _symptom_hits(t)), None)
++        or next(iter(patient_turns), "")
++    )
++    chief_complaint = _trim(complaint_src, 160)
++
++    patient_concerns = [
++        _trim(t) for s, t in substantive
++        if is_patient(s) and t.rstrip().endswith("?")
++    ][:5]
++
++    plan = []
++    for s, t in substantive:
++        if _PLAN.search(t) and (is_doctor(s) or not roles):
++            plan.append(_trim(t))
++    # de-dupe while keeping order
++    plan = list(dict.fromkeys(plan))[:6]
++
++    # The handoff: three bullets, nothing more.
++    handoff = [
++        f"Reason for visit: {chief_complaint or 'not clearly stated'}",
++    ]
++    changed = [s for s in symptoms if s["change"]]
++    if changed:
++        handoff.append("Changes: " + "; ".join(
++            f"{', '.join(s['symptoms'])} ({s['change']})" for s in changed[:3]))
++    elif symptoms:
++        handoff.append("Reported: " + "; ".join(
++            ", ".join(s["symptoms"]) for s in symptoms[:3]))
++    else:
++        handoff.append("No symptoms detected in transcript")
++    tail = []
++    if patient_concerns:
++        tail.append("Patient asked: " + " / ".join(patient_concerns[:2]))
++    if plan:
++        tail.append("Next steps: " + " / ".join(plan[:2]))
++    handoff.append(" | ".join(tail) if tail else "No open questions or orders detected")
++
++    return {
++        "roles": roles,
++        "chief_complaint": chief_complaint,
++        "symptoms": symptoms,
++        "patient_concerns": patient_concerns,
++        "plan": plan,
++        "handoff": handoff,
++    }
++
++# ---------------------------------------------------------------------------
++# Optional LLM pass (Gemini -> Bedrock Nova, same chain as llm_scoring)
++# ---------------------------------------------------------------------------
++
++CLINICAL_PROMPT = """You are a clinical documentation assistant. Below is a transcript of a doctor-patient encounter recorded on a doctor-worn wearable with the patient's consent.
++
++Extract ONLY what the doctor needs for the chart. Reply with ONLY a JSON object, no other text:
++{"chief_complaint": "...", "symptoms": [{"description": "...", "onset": "...", "change": "..."}], "patient_concerns": ["..."], "plan": ["..."], "handoff": "Two or three plain sentences the doctor can read in ten seconds before the next patient."}
++Do not invent facts not present in the transcript; use null for anything unknown.
++
++Transcript:
++{transcript}"""
++
++
++def _strip_fences(text):
++    text = (text or "").strip()
++    if text.startswith("```"):
++        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
++    return text.strip() or None
++
++
++def _parse_clinical(text, items):
++    """Parse one provider's raw reply into {key: clinical dict}. {} on failure."""
++    text = _strip_fences(text)
++    if not text:
++        return {}
++    try:
++        data = json.loads(text)
++    except ValueError:
++        return {}
++    if not isinstance(data, dict):
++        return {}
++    results = {}
++    for key, _ in items:
++        entry = data.get(key)
++        if not isinstance(entry, dict):
++            continue
++        results[key] = {
++            "chief_complaint": entry.get("chief_complaint"),
++            "symptoms": entry.get("symptoms") or [],
++            "patient_concerns": entry.get("patient_concerns") or [],
++            "plan": entry.get("plan") or [],
++            "handoff": entry.get("handoff"),
++        }
++    return results
++
++
++def clinical_batch(items):
++    """Extract clinical facts from many encounters with a SINGLE LLM call.
++
++    ``items`` is [(key, parts)] with ``parts`` as [(speaker, text)].
++    Returns {key: {"chief_complaint", "symptoms", "patient_concerns",
++    "plan", "handoff"}}. Keys the provider fumbles are omitted, so callers
++    fall back to the deterministic extraction for those encounters.
++
++    Provider chain mirrors llm_scoring: Gemini first when a key is set,
++    then Bedrock Nova via boto3. No provider -> {} and the deterministic
++    layer stands alone. Enabling this sends transcript text to the
++    configured provider.
++    """
++    items = [(key, parts) for key, parts in items if parts]
++    if not items:
++        return {}
++    blocks = "\n\n".join(
++        f"### Encounter {key}\n{_transcript_text(parts)}" for key, parts in items
++    )
++    prompt = CLINICAL_PROMPT.replace("{transcript}", blocks)
++    results = {}
++    if API_KEY:
++        results = _parse_clinical(_gemini_post(prompt, 2048), items)
++    if not results:
++        results = _parse_clinical(_bedrock_post(prompt, 2048), items)
++    return results
++
++
++# ---------------------------------------------------------------------------
++# One-page encounter summary (the deliverable)
++# ---------------------------------------------------------------------------
++
++def write_clinical_docx(path, title, rec_date, det, llm):
++    """Write the one-page clinical encounter summary.
++
++    ``det`` is extract_clinical() output; ``llm`` is the clinical_batch()
++    entry for this encounter (or None). The LLM handoff replaces the
++    deterministic bullets when present; the structured sections stay
++    deterministic so there is always a no-LLM paper trail.
++    """
++    doc = Document()
++    doc.core_properties.title = f"Clinical Encounter Summary - {title}"
++    doc.add_heading("Clinical Encounter Summary", 0)
++    doc.add_paragraph(f"{title}  •  {rec_date}")
++    doc.add_paragraph(
++        "Recorded on a doctor-worn Bee (patient encounter). "
++        "Heuristic extraction - review before filing."
++    )
++
++    doc.add_heading("Handoff - read first", 1)
++    handoff = (llm or {}).get("handoff") or det["handoff"]
++    if isinstance(handoff, str):
++        doc.add_paragraph(handoff)
++    else:
++        for bullet in handoff:
++            doc.add_paragraph(bullet, style="List Bullet")
++
++    doc.add_heading("Reason for visit", 1)
++    doc.add_paragraph(det["chief_complaint"] or "Not clearly stated.")
++
++    doc.add_heading("Symptoms", 1)
++    if det["symptoms"]:
++        for s in det["symptoms"]:
++            bits = ", ".join(s["symptoms"])
++            extras = " / ".join(
++                x for x in (s["onset"], s["change"], s["severity"]) if x
++            )
++            line = f"{bits}" + (f" - {extras}" if extras else "")
++            p = doc.add_paragraph(line, style="List Bullet")
++            p.add_run(f"\n\"{s['text']}\"")
++    else:
++        doc.add_paragraph("None detected.")
++
++    doc.add_heading("Patient concerns", 1)
++    if det["patient_concerns"]:
++        for q in det["patient_concerns"]:
++            doc.add_paragraph(q, style="List Bullet")
++    else:
++        doc.add_paragraph("None detected.")
++
++    doc.add_heading("Plan / follow-ups", 1)
++    if det["plan"]:
++        for item in det["plan"]:
++            doc.add_paragraph(item, style="List Bullet")
++    else:
++        doc.add_paragraph("None detected.")
++
++    doc.add_paragraph(
++        "Privacy: deterministic extraction never leaves this machine. "
++        "LLM enrichment sends transcript text to the configured provider."
++    )
++    doc.save(path)
++
++
++# ---------------------------------------------------------------------------
++# Fetch + run
++# ---------------------------------------------------------------------------
++
++def fetch_encounters(limit=10):
++    """Pull raw encounter transcripts via the Bee CLI.
++
++    Returns (encounters, info); each encounter is {"id", "title", "date",
++    "parts", "events"}. Unlike fetch_report_data this never scores and
++    never touches the coaching dashboard - clinical mode is extraction
++    only. Empty when the CLI is missing/unauthenticated (use the simulator
++    to demo without hardware).
++    """
++    from bee_fetcher import (
++        MOCK_FORCED,
++        BEE_CMD,
++        cli_available,
++        is_authenticated,
++        list_conversations,
++        _conv_id,
++        _recording_date,
++        _resolve_source,
++    )
++
++    if MOCK_FORCED or not cli_available() or not is_authenticated():
++        return [], {
++            "mode": "unavailable",
++            "detail": (
++                f"'{BEE_CMD}' not ready - clinical mode needs transcripts; "
++                "run with the simulator on PATH to demo without hardware"
++            ),
++        }
++    encounters = []
++    for conv in list_conversations(limit=limit):
++        conv_id = _conv_id(conv)
++        source, parts, events = _resolve_source(conv)
++        if not parts:
++            continue
++        title = (
++            source.get("title")
++            or source.get("summary")
++            or (f"Encounter {conv_id}" if conv_id is not None else "Encounter")
++        )
++        encounters.append({
++            "id": conv_id,
++            "title": str(title)[:80],
++            "date": _recording_date(source),
++            "parts": parts,
++            "events": events,
++        })
++    return encounters, {"mode": "live",
++                        "detail": f"{len(encounters)} encounters via Bee CLI"}
++
++
++def run_clinical(limit=10, out_dir=None):
++    """Run clinical mode: extract + write one summary docx per encounter."""
++    out_dir = Path(out_dir or Path(__file__).resolve().parent / "family")
++    out_dir.mkdir(parents=True, exist_ok=True)
++
++    encounters, info = fetch_encounters(limit)
++    if not encounters:
++        print(f"Clinical mode: {info['detail']}.")
++        return []
++
++    llm_map = (clinical_batch([(str(e["id"]), e["parts"]) for e in encounters])
++               if llm_available() else {})
++    if llm_map:
++        print("LLM enrichment: on (handoff refined by provider)")
++    else:
++        print("LLM enrichment: off (deterministic only - nothing leaves this machine)")
++
++    saved = []
++    for e in encounters:
++        det = extract_clinical(e["parts"])
++        llm = llm_map.get(str(e["id"]))
++        slug = re.sub(r"\W+", "_", e["title"]).strip("_")[:40] or "encounter"
++        day = e["date"] or date.today()
++        fname = f"Clinical_Summary_{day}_{slug}.docx"
++        write_clinical_docx(out_dir / fname, e["title"], day, det, llm)
++        saved.append(fname)
++        print(f"\n=== {e['title']} ({day}) ===")
++        handoff = [llm["handoff"]] if llm and llm.get("handoff") else det["handoff"]
++        for bullet in handoff:
++            print(f"  - {bullet}")
++        print(f"  Saved: {fname}")
++    return saved
++
++
++if __name__ == "__main__":
++    run_clinical()
+diff --git a/simulator/conversations.json b/simulator/conversations.json
+index a7c449d..7ebde7e 100644
+--- a/simulator/conversations.json
++++ b/simulator/conversations.json
+@@ -1 +1 @@
+-[{"id": "sim_argument", "minutes_ago": 2880, "summary": "Heated disagreement about holiday plans", "title": "Kitchen table argument", "utterances": [{"minutes_ago": 120, "speaker": "Speaker 1", "text": "I hate how you always dismiss my ideas in front of everyone", "pause_s": 1.5}, {"minutes_ago": 118, "speaker": "Speaker 2", "text": "Oh please, you do the exact same thing, don't even start", "pause_s": 1.5}, {"minutes_ago": 116, "speaker": "Speaker 1", "text": "Name one time! You can't, because it never happens", "pause_s": 1.5}, {"minutes_ago": 114, "speaker": "Speaker 2", "text": "Last Tuesday's dinner, ring a bell? You cut me off twice", "pause_s": 1.5}, {"minutes_ago": 112, "speaker": "Speaker 1", "text": "That is completely different and you know it, stop twisting things around", "pause_s": 1.5}, {"minutes_ago": 110, "speaker": "Speaker 2", "text": "Am I? Or do you just hate being called out for once in your life?", "pause_s": 1.5}, {"minutes_ago": 108, "speaker": "Speaker 1", "text": "Why can't you ever just listen instead of turning everything into a fight?", "pause_s": 1.5}, {"minutes_ago": 106, "speaker": "Speaker 2", "text": "Why can't you admit when you're wrong about something for a change?", "pause_s": 1.5}]}, {"id": "sim_debate", "minutes_ago": 4320, "summary": "Team weighs delaying launch vs hitting marketing dates", "title": "Product launch debate", "utterances": [{"minutes_ago": 90, "speaker": "Speaker 1", "text": "I think we should push the launch to next month so the onboarding flow is solid", "pause_s": 4.0}, {"minutes_ago": 88, "speaker": "Speaker 2", "text": "But marketing already booked the campaign slots, what would we tell them exactly?", "pause_s": 4.0}, {"minutes_ago": 86, "speaker": "Speaker 1", "text": "We tell them a rushed launch hurts more than a delayed one, remember last quarter", "pause_s": 4.0}, {"minutes_ago": 84, "speaker": "Speaker 2", "text": "Fair point, though what is the minimum we could ship without embarrassing ourselves?", "pause_s": 4.0}, {"minutes_ago": 82, "speaker": "Speaker 1", "text": "Probably the core dashboard and the export feature, everything else can wait", "pause_s": 4.0}, {"minutes_ago": 80, "speaker": "Speaker 2", "text": "Okay so how do we decide what counts as core versus nice to have here?", "pause_s": 4.0}]}, {"id": "sim_monologue", "minutes_ago": 7200, "summary": "Alex walks through the day's plan while Jo mostly listens", "title": "Morning briefing monologue", "utterances": [{"minutes_ago": 60, "speaker": "Speaker 1", "text": "So the plan for tomorrow is we start with the standup then I will walk through the architecture diagram in detail", "pause_s": 8.0}, {"minutes_ago": 59, "speaker": "Speaker 2", "text": "Sounds good", "pause_s": 8.0}, {"minutes_ago": 58, "speaker": "Speaker 1", "text": "After that I need everyone to review the migration checklist I posted yesterday evening carefully", "pause_s": 8.0}, {"minutes_ago": 57, "speaker": "Speaker 2", "text": "Will do", "pause_s": 8.0}, {"minutes_ago": 56, "speaker": "Speaker 1", "text": "And please remember the deploy freeze starts Friday so get your pull requests merged before then", "pause_s": 8.0}]}, {"id": "sim_backchannel", "minutes_ago": 10080, "summary": "Two people mostly saying yeah and uh-huh at each other", "title": "Backchannel ping-pong", "utterances": [{"minutes_ago": 48, "speaker": "Speaker 1", "text": "So we need to finalize the vendor contract by Friday", "pause_s": 1.0}, {"minutes_ago": 47, "speaker": "Speaker 2", "text": "Yeah", "pause_s": 1.0}, {"minutes_ago": 46, "speaker": "Speaker 1", "text": "Legal already reviewed the liability clause last week", "pause_s": 1.0}, {"minutes_ago": 45, "speaker": "Speaker 2", "text": "Uh-huh", "pause_s": 1.0}, {"minutes_ago": 44, "speaker": "Speaker 1", "text": "The payment terms are net thirty which is standard for us", "pause_s": 1.0}, {"minutes_ago": 43, "speaker": "Speaker 2", "text": "Right", "pause_s": 1.0}, {"minutes_ago": 42, "speaker": "Speaker 1", "text": "I told them we need the renewal option in writing", "pause_s": 1.0}, {"minutes_ago": 41, "speaker": "Speaker 2", "text": "Mm-hm", "pause_s": 1.0}, {"minutes_ago": 40, "speaker": "Speaker 1", "text": "And the support SLA has to cover weekends during launch", "pause_s": 1.0}, {"minutes_ago": 39, "speaker": "Speaker 2", "text": "Yeah", "pause_s": 1.0}, {"minutes_ago": 38, "speaker": "Speaker 1", "text": "Procurement wants three competing quotes before sign-off", "pause_s": 1.0}, {"minutes_ago": 37, "speaker": "Speaker 2", "text": "Okay", "pause_s": 1.0}]}, {"id": "sim_short_qa", "minutes_ago": 14400, "summary": "Brief three-turn exchange about the meeting time", "title": "Quick check-in", "utterances": [{"minutes_ago": 24, "speaker": "Speaker 1", "text": "What time is the client call tomorrow?", "pause_s": 3.0}, {"minutes_ago": 23, "speaker": "Speaker 2", "text": "Ten in the morning, same link as last week", "pause_s": 3.0}, {"minutes_ago": 22, "speaker": "Speaker 1", "text": "Got it, I will join five minutes early to test audio", "pause_s": 3.0}]}, {"id": "sim_no_speakers", "minutes_ago": 20160, "summary": "Transcript arrived with no speaker labels attached", "title": "Unlabeled recording", "utterances": [{"minutes_ago": 20, "speaker": null, "text": "Did anyone pick up the dry cleaning on the way home", "pause_s": 5.0}, {"minutes_ago": 19, "speaker": null, "text": "I got it, it is hanging by the front door already", "pause_s": 5.0}, {"minutes_ago": 18, "speaker": null, "text": "Perfect, and did the plumber ever call back about Thursday", "pause_s": 5.0}, {"minutes_ago": 17, "speaker": null, "text": "No, I will chase him in the morning if we hear nothing", "pause_s": 5.0}, {"minutes_ago": 16, "speaker": null, "text": "Okay good, let me know what he says about the quote", "pause_s": 5.0}, {"minutes_ago": 15, "speaker": null, "text": "Will do, it should not take more than a day or two", "pause_s": 5.0}]}]
+\ No newline at end of file
++[{"id": "sim_argument", "minutes_ago": 2880, "summary": "Heated disagreement about holiday plans", "title": "Kitchen table argument", "utterances": [{"minutes_ago": 120, "speaker": "Speaker 1", "text": "I hate how you always dismiss my ideas in front of everyone", "pause_s": 1.5}, {"minutes_ago": 118, "speaker": "Speaker 2", "text": "Oh please, you do the exact same thing, don't even start", "pause_s": 1.5}, {"minutes_ago": 116, "speaker": "Speaker 1", "text": "Name one time! You can't, because it never happens", "pause_s": 1.5}, {"minutes_ago": 114, "speaker": "Speaker 2", "text": "Last Tuesday's dinner, ring a bell? You cut me off twice", "pause_s": 1.5}, {"minutes_ago": 112, "speaker": "Speaker 1", "text": "That is completely different and you know it, stop twisting things around", "pause_s": 1.5}, {"minutes_ago": 110, "speaker": "Speaker 2", "text": "Am I? Or do you just hate being called out for once in your life?", "pause_s": 1.5}, {"minutes_ago": 108, "speaker": "Speaker 1", "text": "Why can't you ever just listen instead of turning everything into a fight?", "pause_s": 1.5}, {"minutes_ago": 106, "speaker": "Speaker 2", "text": "Why can't you admit when you're wrong about something for a change?", "pause_s": 1.5}]}, {"id": "sim_debate", "minutes_ago": 4320, "summary": "Team weighs delaying launch vs hitting marketing dates", "title": "Product launch debate", "utterances": [{"minutes_ago": 90, "speaker": "Speaker 1", "text": "I think we should push the launch to next month so the onboarding flow is solid", "pause_s": 4.0}, {"minutes_ago": 88, "speaker": "Speaker 2", "text": "But marketing already booked the campaign slots, what would we tell them exactly?", "pause_s": 4.0}, {"minutes_ago": 86, "speaker": "Speaker 1", "text": "We tell them a rushed launch hurts more than a delayed one, remember last quarter", "pause_s": 4.0}, {"minutes_ago": 84, "speaker": "Speaker 2", "text": "Fair point, though what is the minimum we could ship without embarrassing ourselves?", "pause_s": 4.0}, {"minutes_ago": 82, "speaker": "Speaker 1", "text": "Probably the core dashboard and the export feature, everything else can wait", "pause_s": 4.0}, {"minutes_ago": 80, "speaker": "Speaker 2", "text": "Okay so how do we decide what counts as core versus nice to have here?", "pause_s": 4.0}]}, {"id": "sim_monologue", "minutes_ago": 7200, "summary": "Alex walks through the day's plan while Jo mostly listens", "title": "Morning briefing monologue", "utterances": [{"minutes_ago": 60, "speaker": "Speaker 1", "text": "So the plan for tomorrow is we start with the standup then I will walk through the architecture diagram in detail", "pause_s": 8.0}, {"minutes_ago": 59, "speaker": "Speaker 2", "text": "Sounds good", "pause_s": 8.0}, {"minutes_ago": 58, "speaker": "Speaker 1", "text": "After that I need everyone to review the migration checklist I posted yesterday evening carefully", "pause_s": 8.0}, {"minutes_ago": 57, "speaker": "Speaker 2", "text": "Will do", "pause_s": 8.0}, {"minutes_ago": 56, "speaker": "Speaker 1", "text": "And please remember the deploy freeze starts Friday so get your pull requests merged before then", "pause_s": 8.0}]}, {"id": "sim_backchannel", "minutes_ago": 10080, "summary": "Two people mostly saying yeah and uh-huh at each other", "title": "Backchannel ping-pong", "utterances": [{"minutes_ago": 48, "speaker": "Speaker 1", "text": "So we need to finalize the vendor contract by Friday", "pause_s": 1.0}, {"minutes_ago": 47, "speaker": "Speaker 2", "text": "Yeah", "pause_s": 1.0}, {"minutes_ago": 46, "speaker": "Speaker 1", "text": "Legal already reviewed the liability clause last week", "pause_s": 1.0}, {"minutes_ago": 45, "speaker": "Speaker 2", "text": "Uh-huh", "pause_s": 1.0}, {"minutes_ago": 44, "speaker": "Speaker 1", "text": "The payment terms are net thirty which is standard for us", "pause_s": 1.0}, {"minutes_ago": 43, "speaker": "Speaker 2", "text": "Right", "pause_s": 1.0}, {"minutes_ago": 42, "speaker": "Speaker 1", "text": "I told them we need the renewal option in writing", "pause_s": 1.0}, {"minutes_ago": 41, "speaker": "Speaker 2", "text": "Mm-hm", "pause_s": 1.0}, {"minutes_ago": 40, "speaker": "Speaker 1", "text": "And the support SLA has to cover weekends during launch", "pause_s": 1.0}, {"minutes_ago": 39, "speaker": "Speaker 2", "text": "Yeah", "pause_s": 1.0}, {"minutes_ago": 38, "speaker": "Speaker 1", "text": "Procurement wants three competing quotes before sign-off", "pause_s": 1.0}, {"minutes_ago": 37, "speaker": "Speaker 2", "text": "Okay", "pause_s": 1.0}]}, {"id": "sim_short_qa", "minutes_ago": 14400, "summary": "Brief three-turn exchange about the meeting time", "title": "Quick check-in", "utterances": [{"minutes_ago": 24, "speaker": "Speaker 1", "text": "What time is the client call tomorrow?", "pause_s": 3.0}, {"minutes_ago": 23, "speaker": "Speaker 2", "text": "Ten in the morning, same link as last week", "pause_s": 3.0}, {"minutes_ago": 22, "speaker": "Speaker 1", "text": "Got it, I will join five minutes early to test audio", "pause_s": 3.0}]}, {"id": "sim_no_speakers", "minutes_ago": 20160, "summary": "Transcript arrived with no speaker labels attached", "title": "Unlabeled recording", "utterances": [{"minutes_ago": 20, "speaker": null, "text": "Did anyone pick up the dry cleaning on the way home", "pause_s": 5.0}, {"minutes_ago": 19, "speaker": null, "text": "I got it, it is hanging by the front door already", "pause_s": 5.0}, {"minutes_ago": 18, "speaker": null, "text": "Perfect, and did the plumber ever call back about Thursday", "pause_s": 5.0}, {"minutes_ago": 17, "speaker": null, "text": "No, I will chase him in the morning if we hear nothing", "pause_s": 5.0}, {"minutes_ago": 16, "speaker": null, "text": "Okay good, let me know what he says about the quote", "pause_s": 5.0}, {"minutes_ago": 15, "speaker": null, "text": "Will do, it should not take more than a day or two", "pause_s": 5.0}]}, {"id": "sim_doctor_visit", "minutes_ago": 180, "summary": "Doctor sees a patient about three weeks of right knee pain", "title": "Patient visit - knee pain", "utterances": [{"minutes_ago": 30, "speaker": "Speaker 1", "text": "Good morning, what brings you in today?", "pause_s": 3.0}, {"minutes_ago": 29, "speaker": "Speaker 2", "text": "Morning. It's my right knee, it's been aching for about three weeks now.", "pause_s": 3.0}, {"minutes_ago": 28, "speaker": "Speaker 1", "text": "How long has it been bothering you like this, and is it getting worse?", "pause_s": 3.0}, {"minutes_ago": 27, "speaker": "Speaker 2", "text": "About three weeks, and definitely worse after my shifts, I'm on my feet all day.", "pause_s": 3.0}, {"minutes_ago": 26, "speaker": "Speaker 1", "text": "Any swelling, or does it ever lock up on you?", "pause_s": 3.0}, {"minutes_ago": 25, "speaker": "Speaker 2", "text": "It swelled up pretty badly last Tuesday, that's when I got worried.", "pause_s": 3.0}, {"minutes_ago": 24, "speaker": "Speaker 1", "text": "Are you taking anything for it right now?", "pause_s": 3.0}, {"minutes_ago": 23, "speaker": "Speaker 2", "text": "Just ibuprofen, 400 milligrams when it gets bad in the evening.", "pause_s": 3.0}, {"minutes_ago": 22, "speaker": "Speaker 1", "text": "On a scale of one to ten, where is the pain by end of day?", "pause_s": 3.0}, {"minutes_ago": 21, "speaker": "Speaker 2", "text": "Like a six out of ten by evening, sometimes I can't sleep on that side.", "pause_s": 3.0}, {"minutes_ago": 20, "speaker": "Speaker 1", "text": "I'm going to order an X-ray and refer you to physiotherapy to start.", "pause_s": 3.0}, {"minutes_ago": 19, "speaker": "Speaker 2", "text": "Could this be arthritis? My mother had it quite young.", "pause_s": 3.0}, {"minutes_ago": 18, "speaker": "Speaker 1", "text": "We'll see what the imaging shows before we talk about that, no need to jump ahead.", "pause_s": 3.0}, {"minutes_ago": 17, "speaker": "Speaker 2", "text": "Will I need surgery, do you think?", "pause_s": 3.0}, {"minutes_ago": 16, "speaker": "Speaker 1", "text": "Let's have you back in three weeks and see how it responds to physio first.", "pause_s": 3.0}, {"minutes_ago": 15, "speaker": "Speaker 2", "text": "Okay, thank you doctor.", "pause_s": 3.0}]}]

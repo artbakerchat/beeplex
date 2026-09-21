@@ -259,7 +259,7 @@ def preview_score(scenario):
     events = bee_fetcher._utterance_events(conv)
     engagement, _tone, forward_motion = bee_fetcher._engagement_cells(parts, events)
     print(f"Engagement: {engagement} | Forward motion: {forward_motion}"
-          f"  (tone needs GEMINI_API_KEY)")
+          f"  (tone needs GEMINI_API_KEY or AWS Bedrock credentials)")
 
 
 def main():

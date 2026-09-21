@@ -23,17 +23,25 @@ binary path.
 
 ## LLM layer (optional)
 
-`llm_scoring.py` scores all of a run's transcripts in a single Gemini call:
+`llm_scoring.py` scores all of a run's transcripts in a single LLM call:
 a second-opinion engagement score plus a one-line rationale per
 conversation, averaged with the deterministic score — and a
 tone/positivity rating (`Warm (8/10)`), which can't be done
-deterministically. Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) to enable it;
-`GEMINI_MODEL` overrides the model (default `gemini-3.5-flash`). You can put
-the key in a `.env` file next to `family.py` (`GEMINI_API_KEY=...`) instead
-of exporting it — it's gitignored, so it never reaches the repo. With no key
-— or if the API fails — the deterministic score stands alone and the
+deterministically. Two providers, one shared prompt: Gemini is tried first
+— set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`); `GEMINI_MODEL` overrides the
+model (default `gemini-3.5-flash`). You can put the key in a `.env` file
+next to `family.py` (`GEMINI_API_KEY=...`) instead of exporting it — it's
+gitignored, so it never reaches the repo. If Gemini is missing or its call
+fails, AWS Bedrock Nova is tried next via boto3 with your local AWS
+credentials (region defaults to `ca-central-1`, override with
+`BEDROCK_REGION`/`AWS_REGION`; model defaults to `us.amazon.nova-lite-v1:0`
+— Nova isn't served in-region in Canada, so this is the US cross-region
+inference profile AWS documents for ca-central-1; override with
+`BEDROCK_MODEL`). With no working provider — or if the API
+fails — the deterministic score stands alone and the
 pipeline never breaks. Note: enabling this sends your transcript text to
-Google's API; the key lives only in your environment, never in the repo.
+Google's and/or Amazon's API; keys live only in your environment or `.env`,
+never in the repo.
 
 ## Temporal dynamics (third scoring domain)
 

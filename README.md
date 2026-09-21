@@ -120,7 +120,8 @@ not a rubric.
 
 `clinical_extraction.py` runs a deterministic pass over each transcript
 (heuristic doctor/patient role detection, symptom spotting with
-onset/change/severity markers, patient questions, plan items like
+onset/change/severity markers, medication mentions with dose and change
+verbs, follow-up timeframes, patient questions, plan items like
 prescriptions, referrals, tests, follow-ups) and writes a one-page
 **Clinical Encounter Summary** (`.docx`) per conversation into `family/`.
 With an LLM configured, the same Gemini → Bedrock Nova chain used by
@@ -128,8 +129,9 @@ With an LLM configured, the same Gemini → Bedrock Nova chain used by
 one API call for the whole run. Without it, the deterministic layer stands
 alone and nothing leaves the machine.
 
-Try it without hardware — the simulator ships a scripted doctor-patient
-visit (`sim_doctor_visit`):
+Try it without hardware — the simulator ships two scripted visits:
+`sim_doctor_visit` (a knee-pain workup) and `sim_followup_visit` (a blood
+pressure medication review with a dose change):
 
     PATH="simulator:$PATH" python3 bee_fetcher.py --clinical
 

@@ -120,6 +120,7 @@ def coaching_tips(bd, repeats):
                          "Long pauses after substantive turns \u2014 replies "
                          "are landing late."))
     fm = bd["fm"]
+    fs = {}
     if fm:
         fs = fm["signals"]
         circ = fs.get("circularity", 0) or 0

@@ -109,11 +109,71 @@ _SEVERITY = re.compile(
 )
 _PLAN = re.compile(
     r"\b(prescrib\w*|prescription|refer(?:ral)?|blood ?work|blood tests?|"
-    r"x-?ray|mri|ultrasound|scan|follow.?up|come back|appointment|"
-    r"schedul\w+|physio(?:therapy)?|surgery|\d+\s*mg\b|ibuprofen|"
-    r"antibiotics?)\b",
+    r"labs?|metabolic panel|x-?ray|mri|ultrasound|scan|follow.?up|"
+    r"come back|appointment|schedul\w+|physio(?:therapy)?|surgery|"
+    r"\d+\s*mg\b|ibuprofen|antibiotics?)\b",
     re.IGNORECASE,
 )
+
+# Medication mentions: "lisinopril 20 mg", "amlodipine 5 mg". Doses may be
+# written as words ("twenty milligrams") in transcripts, so normalize the
+# common ones before matching.
+_NUMWORDS = {
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+    "fifteen": "15", "twenty": "20", "thirty": "30", "forty": "40",
+    "fifty": "50",
+}
+_NUMWORDS_RE = re.compile(
+    r"\b(" + "|".join(_NUMWORDS) + r")\s+(milligrams?|mg)\b", re.IGNORECASE)
+
+_MED_DOSE = re.compile(
+    r"\b([A-Za-z][A-Za-z\-]{2,})\s+(\d+(?:\.\d+)?)\s*mg\b", re.IGNORECASE)
+_ORPHAN_DOSE = re.compile(r"\b(\d+(?:\.\d+)?)\s*mg\b", re.IGNORECASE)
+# Words that are never a drug name when scanning backwards from a dose.
+_MED_STOPWORDS = {
+    "to", "the", "a", "an", "of", "back", "dose", "doses", "daily",
+    "your", "you", "that", "this", "with", "for", "and", "then", "my",
+}
+_MED_KNOWN = re.compile(
+    r"\b(ibuprofen|acetaminophen|tylenol|aspirin|antibiotics?)\b",
+    re.IGNORECASE)
+_MED_CHANGE = re.compile(
+    r"\b(raise[sd]?|increase[sd]?|increasing|lower[sd]?|decrease[sd]?|"
+    r"decreasing|drop(?:ped|ping)?|start(?:ed|ing)?|add(?:ed|ing)?|"
+    r"stop(?:ped|ping)?|continue[sd]?|continuing|keep taking)\b",
+    re.IGNORECASE,
+)
+_MED_CHANGE_MAP = {
+    "raise": "increased", "raised": "increased", "increase": "increased",
+    "increased": "increased", "increasing": "increased",
+    "lower": "decreased", "lowered": "decreased", "decrease": "decreased",
+    "decreased": "decreased", "decreasing": "decreased",
+    "drop": "decreased", "dropped": "decreased", "dropping": "decreased",
+    "start": "started", "started": "started", "starting": "started",
+    "add": "started", "added": "started", "adding": "started",
+    "stop": "stopped", "stopped": "stopped", "stopping": "stopped",
+    "continue": "continued", "continues": "continued", "continued": "continued",
+    "continuing": "continued", "keep taking": "continued",
+}
+_MED_FREQ = re.compile(
+    r"\b(daily|every morning|every evening|twice a day|at bedtime|"
+    r"as needed|now and then|with breakfast|with food)\b",
+    re.IGNORECASE,
+)
+
+_FOLLOWUP = re.compile(
+    r"\b(?:come back|have you back|see you|follow.?up|return)\s+"
+    r"(?:back\s+)?in\s+"
+    r"((?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+    r"(?:days?|weeks?|months?))\b",
+    re.IGNORECASE,
+)
+
+
+def _normalize_dose_words(text):
+    return _NUMWORDS_RE.sub(
+        lambda m: f"{_NUMWORDS[m.group(1).lower()]} mg", text)
 
 
 def detect_roles(parts):
@@ -159,12 +219,112 @@ def _trim(text, n=140):
     return text if len(text) <= n else text[: n - 1].rstrip() + "…"
 
 
+def extract_medications(substantive):
+    """Heuristic medication mentions: [{name, dose, frequency, change}].
+
+    One entry per drug (last mention wins for dose); ``change`` is one of
+    increased/decreased/started/stopped/continued when a change verb is
+    nearby, else None. Deterministic and conservative - brand/generic
+    coverage is deliberately narrow; the LLM pass refines when enabled.
+    """
+    meds = {}
+
+    def note(name, dose=None, freq=None, change=None):
+        key = name.lower()
+        entry = meds.setdefault(key, {"name": name.lower()})
+        if dose:
+            entry["dose"] = dose
+        if freq and "frequency" not in entry:
+            entry["frequency"] = freq
+        if change:
+            entry["change"] = change
+        return entry
+
+    def change_before(name_start):
+        # Change verbs precede the drug ("raised the lisinopril", "add
+        # amlodipine") - a verb after the mention belongs to another drug.
+        cm = _MED_CHANGE.search(text[max(0, name_start - 40): name_start])
+        return _MED_CHANGE_MAP.get(cm.group(1).lower()) if cm else None
+
+    for _, t in substantive:
+        text = _normalize_dose_words(t)
+        direct_spans = []
+        for m in _MED_DOSE.finditer(text):
+            direct_spans.append(m.span())
+            name, dose = m.group(1), f"{m.group(2)} mg"
+            window = text[max(0, m.start() - 40): m.end() + 40]
+            fm = _MED_FREQ.search(window)
+            note(name, dose, fm.group(1).lower() if fm else None,
+                 change_before(m.start(1)))
+        for m in _ORPHAN_DOSE.finditer(text):
+            # "raised the lisinopril to 20 mg" - the name rides ahead of the
+            # dose with small words between. Scan backwards past stopwords.
+            if any(s <= m.start() < e for s, e in direct_spans):
+                continue
+            base = max(0, m.start() - 50)
+            before = text[base: m.start()]
+            known = _MED_KNOWN.search(before)
+            if known:
+                name, name_start = known.group(1), base + known.start()
+            else:
+                words = [w for w in
+                         re.findall(r"[A-Za-z\-]{4,}", before)
+                         if w.lower() not in _MED_STOPWORDS]
+                if not words:
+                    continue
+                name = words[-1]
+                name_start = base + before.lower().rfind(name.lower())
+            dose = f"{m.group(1)} mg"
+            fm = _MED_FREQ.search(text[max(0, m.start() - 40): m.end() + 40])
+            note(name, dose, fm.group(1).lower() if fm else None,
+                 change_before(name_start))
+        for m in _MED_KNOWN.finditer(text):
+            name = m.group(1).lower()
+            if any(k == name for k in meds):
+                continue
+            fm = _MED_FREQ.search(text)
+            note(name, None, fm.group(1).lower() if fm else None, None)
+    return list(meds.values())
+
+
+def extract_followup(substantive, roles):
+    """First 'see you back in N weeks'-style timeframe, normalized to digits."""
+    for s, t in substantive:
+        if roles and roles.get(s) != "doctor":
+            continue
+        m = _FOLLOWUP.search(_normalize_dose_words(t))
+        if m:
+            when = m.group(1).lower()
+            when = re.sub(r"\b(one|two|three|four|five|six|seven|eight|nine|ten)\b",
+                          lambda mm: _NUMWORDS[mm.group(1)], when)
+            return when
+    return None
+
+
+def _dedupe_words(words):
+    """Drop near-duplicate symptom words sharing a 4-letter stem."""
+    kept = []
+    for w in words:
+        if not any(w[:4] == k[:4] for k in kept):
+            kept.append(w)
+    return kept
+
+
+def _render_med(m):
+    bits = " ".join(x for x in (m.get("name"), m.get("dose"),
+                                m.get("frequency")) if x)
+    if m.get("change"):
+        bits += f" ({m['change']})"
+    return bits
+
+
 def extract_clinical(parts):
     """Deterministic clinical extraction from [(speaker, text)].
 
-    Returns {"roles", "chief_complaint", "symptoms", "patient_concerns",
-    "plan", "handoff"}. ``handoff`` is three short bullets - the whole
-    point of this mode: the two or three things worth feeding forward.
+    Returns {"roles", "chief_complaint", "symptoms", "medications",
+    "follow_up", "patient_concerns", "plan", "handoff"}. ``handoff`` is
+    three short bullets - the whole point of this mode: the two or three
+    things worth feeding forward.
     """
     substantive = [(s, t) for s, t in parts if _is_substantive(t)]
     roles = detect_roles(parts)
@@ -214,10 +374,17 @@ def extract_clinical(parts):
 
     plan = []
     for s, t in substantive:
+        # Questions are not orders: "you're here for the follow-up?" would
+        # otherwise land in the plan via the follow-up keyword.
+        if t.rstrip().endswith("?"):
+            continue
         if _PLAN.search(t) and (is_doctor(s) or not roles):
             plan.append(_trim(t))
     # de-dupe while keeping order
     plan = list(dict.fromkeys(plan))[:6]
+
+    medications = extract_medications(substantive)
+    follow_up = extract_followup(substantive, roles)
 
     # The handoff: three bullets, nothing more.
     handoff = [
@@ -225,11 +392,17 @@ def extract_clinical(parts):
     ]
     changed = [s for s in symptoms if s["change"]]
     if changed:
+        words = _dedupe_words(
+            w for s in changed[:3] for w in s["symptoms"])
         handoff.append("Changes: " + "; ".join(
-            f"{', '.join(s['symptoms'])} ({s['change']})" for s in changed[:3]))
+            f"{', '.join(w for w in s['symptoms'] if w in words)}"
+            f" ({s['change']})"
+            for s in changed[:3]
+            if any(w in words for w in s["symptoms"])))
     elif symptoms:
-        handoff.append("Reported: " + "; ".join(
-            ", ".join(s["symptoms"]) for s in symptoms[:3]))
+        words = _dedupe_words(
+            w for s in symptoms[:3] for w in s["symptoms"])
+        handoff.append("Reported: " + "; ".join(words))
     else:
         handoff.append("No symptoms detected in transcript")
     tail = []
@@ -237,15 +410,39 @@ def extract_clinical(parts):
         tail.append("Patient asked: " + " / ".join(patient_concerns[:2]))
     if plan:
         tail.append("Next steps: " + " / ".join(plan[:2]))
+    if medications:
+        tail.append("Meds: " + "; ".join(
+            _render_med(m) for m in medications[:4]))
+    if follow_up:
+        tail.append(f"Follow-up: in {follow_up}")
     handoff.append(" | ".join(tail) if tail else "No open questions or orders detected")
+
+    # Sparse transcript: the patient spoke, but only in a few words per turn,
+    # and the extractor found nothing to report. Per the design note above,
+    # this is not a clean bill of health - it usually means the verbal
+    # channel failed and the real concern never made it into words.
+    patient_turns = [t for s, t in parts if is_patient(s) and t.strip()]
+    avg_words = (sum(len(t.split()) for t in patient_turns) / len(patient_turns)
+                 if patient_turns else 0)
+    sparse_transcript = bool(
+        patient_turns
+        and avg_words < 6
+        and not symptoms
+        and not medications
+        and not patient_concerns
+        and not plan
+    )
 
     return {
         "roles": roles,
         "chief_complaint": chief_complaint,
         "symptoms": symptoms,
+        "medications": medications,
+        "follow_up": follow_up,
         "patient_concerns": patient_concerns,
         "plan": plan,
         "handoff": handoff,
+        "sparse_transcript": sparse_transcript,
     }
 
 # ---------------------------------------------------------------------------
@@ -255,7 +452,7 @@ def extract_clinical(parts):
 CLINICAL_PROMPT = """You are a clinical documentation assistant. Below is a transcript of a doctor-patient encounter recorded on a doctor-worn wearable with the patient's consent.
 
 Extract ONLY what the doctor needs for the chart. Reply with ONLY a JSON object, no other text:
-{"chief_complaint": "...", "symptoms": [{"description": "...", "onset": "...", "change": "..."}], "patient_concerns": ["..."], "plan": ["..."], "handoff": "Two or three plain sentences the doctor can read in ten seconds before the next patient."}
+{"chief_complaint": "...", "symptoms": [{"description": "...", "onset": "...", "change": "..."}], "medications": [{"name": "...", "dose": "...", "change": "increased/decreased/started/stopped/continued or null"}], "follow_up": "e.g. 4 weeks or null", "patient_concerns": ["..."], "plan": ["..."], "handoff": "Two or three plain sentences the doctor can read in ten seconds before the next patient."}
 Do not invent facts not present in the transcript; use null for anything unknown.
 
 Transcript:
@@ -288,6 +485,8 @@ def _parse_clinical(text, items):
         results[key] = {
             "chief_complaint": entry.get("chief_complaint"),
             "symptoms": entry.get("symptoms") or [],
+            "medications": entry.get("medications") or [],
+            "follow_up": entry.get("follow_up"),
             "patient_concerns": entry.get("patient_concerns") or [],
             "plan": entry.get("plan") or [],
             "handoff": entry.get("handoff"),
@@ -299,8 +498,8 @@ def clinical_batch(items):
     """Extract clinical facts from many encounters with a SINGLE LLM call.
 
     ``items`` is [(key, parts)] with ``parts`` as [(speaker, text)].
-    Returns {key: {"chief_complaint", "symptoms", "patient_concerns",
-    "plan", "handoff"}}. Keys the provider fumbles are omitted, so callers
+    Returns {key: {"chief_complaint", "symptoms", "medications", "follow_up",
+    "patient_concerns", "plan", "handoff"}}. Keys the provider fumbles are omitted, so callers
     fall back to the deterministic extraction for those encounters.
 
     Provider chain mirrors llm_scoring: Gemini first when a key is set,
@@ -327,6 +526,12 @@ def clinical_batch(items):
 # One-page encounter summary (the deliverable)
 # ---------------------------------------------------------------------------
 
+# Design note (2026-09-21): "None detected" is not a clean bill of health.
+# The extractor only reports what it can positively find, so an empty section
+# means *absence of evidence*, never *evidence of absence*. A terse patient
+# ("nothing", "same") often IS the signal - the worry the tool couldn't hear.
+# Never let empty output read like an all-clear; prefer an explicit
+# sparse-transcript flag over a quiet "None detected."
 def write_clinical_docx(path, title, rec_date, det, llm):
     """Write the one-page clinical encounter summary.
 
@@ -375,12 +580,31 @@ def write_clinical_docx(path, title, rec_date, det, llm):
     else:
         doc.add_paragraph("None detected.")
 
+    if det["medications"]:
+        doc.add_heading("Medications mentioned", 1)
+        for m in det["medications"]:
+            doc.add_paragraph(_render_med(m), style="List Bullet")
+
     doc.add_heading("Plan / follow-ups", 1)
+    if det.get("follow_up"):
+        doc.add_paragraph(f"Follow-up: in {det['follow_up']}")
     if det["plan"]:
         for item in det["plan"]:
             doc.add_paragraph(item, style="List Bullet")
-    else:
+    elif not det.get("follow_up"):
         doc.add_paragraph("None detected.")
+
+    doc.add_heading("Recommendation", 1)
+    if det.get("sparse_transcript"):
+        doc.add_paragraph(
+            "The patient had difficulty describing their concern verbally. "
+            "Ask them to show you \u2014 photos, the symptom itself, whatever they have."
+        )
+    else:
+        doc.add_paragraph(
+            "Review this summary with the patient and confirm nothing was "
+            "missed before filing."
+        )
 
     doc.add_paragraph(
         "Privacy: deterministic extraction never leaves this machine. "

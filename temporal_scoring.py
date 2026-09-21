@@ -14,11 +14,17 @@ through time:
                   word "substantial turn" bar doubles as the timing hint.
   circularity     3-4 word phrases repeated 2x+ inside 20+ word turns -
                   the "saying one thing on loop" detector
+  spinning        structural signs of going in circles: questions answered
+                  with questions, absolutist language ("you always/never"),
+                  circling rhetoric ("as I said", "don't even start") -
+                  catches the argument that restates one fight in fresh
+                  words (novelty ~1.0) while going nowhere
   novelty         share of each turn's phrases never seen before in the
                   conversation (restating vs advancing)
 
 pace + responsiveness -> temporal ENERGY (0-10), blended into Engagement.
-circularity + novelty -> FORWARD MOTION (0-10), reported as its own axis:
+circularity + novelty -> lexical motion, discounted by spinning ->
+FORWARD MOTION (0-10), reported as its own axis:
 engagement measures the heat, forward motion measures whether the heat
 is cooking anything. A heated argument and a sharp debate can share an
 engagement score while splitting on forward motion.
@@ -132,6 +138,76 @@ def circularity(text):
     return round(1.0 - eff / len(words), 3)
 
 
+# Absolutist language: "you always/never", bare always/never, "exact same".
+# Well-established markers of heated, stuck exchanges - and purely lexical.
+_ABSOLUTIST_RES = [
+    re.compile(p) for p in (
+        r"\byou always\b", r"\byou never\b",
+        r"\balways\b", r"\bnever\b",
+        r"\bexact same\b", r"\bevery single time\b",
+    )
+]
+# Circling rhetoric: the stock phrases people reach for when an exchange
+# is looping instead of advancing. Small, transparent, documented - not a
+# sentiment model.
+_CIRCLING_PHRASES = (
+    "as i said", "like i said", "like i told you", "i already told you",
+    "i've told you", "i have told you",
+    "we've been over this", "we have been over this", "been through this",
+    "don't even start", "dont even start", "do not even start",
+    "stop twisting", "twisting my words", "twisting things",
+    "for a change", "for once",
+    "here we go again", "not this again", "again with this",
+    "just admit",
+)
+
+
+def _has_absolutist(text):
+    low = text.lower()
+    return any(p.search(low) for p in _ABSOLUTIST_RES)
+
+
+def _has_circling_marker(text):
+    low = text.lower()
+    return any(phrase in low for phrase in _CIRCLING_PHRASES)
+
+
+def spinning(parts):
+    """0..1: structural signs a conversation is going in circles.
+
+    Higher = more spinning. Three sub-signals, averaged:
+      question_chains   share of question-turns answered with another
+                        question instead of an answer
+      absolutist        share of substantive turns using absolutist
+                        language ("you always/never", "exact same", ...)
+      circling_markers  share of substantive turns containing circling
+                        rhetoric ("as I said", "don't even start", ...)
+
+    Reads the *shape* of the exchange, not its meaning: an argument that
+    restates one fight in fresh words scores novelty ~1.0 while going
+    nowhere, and this is the signal that catches it. Returns 0.0 when
+    there is nothing to measure.
+    """
+    from bee_fetcher import _is_substantive
+
+    turns = [t for _, t in parts if _is_substantive(t)]
+    n = len(turns)
+    if n < 2:
+        return {"score": 0.0, "signals": {}}
+    signals = {}
+    q_idx = [i for i, t in enumerate(turns) if t.rstrip().endswith("?")]
+    if q_idx:
+        chained = sum(1 for i in q_idx
+                      if i + 1 < n and turns[i + 1].rstrip().endswith("?"))
+        signals["question_chains"] = round(chained / len(q_idx), 3)
+    signals["absolutist"] = round(
+        sum(1 for t in turns if _has_absolutist(t)) / n, 3)
+    signals["circling_markers"] = round(
+        sum(1 for t in turns if _has_circling_marker(t)) / n, 3)
+    score = round(sum(signals.values()) / len(signals), 3)
+    return {"score": score, "signals": signals}
+
+
 def novelty(parts):
     """0..1: mean share of each turn's 3-word phrases never seen before.
 
@@ -159,11 +235,15 @@ def novelty(parts):
 
 
 def forward_motion(parts):
-    """Forward-motion score 0..10 from circularity + novelty.
+    """Forward-motion score 0..10 from circularity + novelty, discounted
+    by spinning.
 
     The "is this going somewhere" axis, separate from engagement's
-    "how heated is this" axis. Returns None when there is nothing
-    substantive to measure.
+    "how heated is this" axis. Lexical motion (fresh phrases, no verbatim
+    loops) is multiplied by (1 - spinning penalty): a conversation
+    restating one fight in fresh words can score novelty ~1.0 while going
+    nowhere, and the discount is what pulls it back down. Returns None
+    when there is nothing substantive to measure.
     """
     from bee_fetcher import _is_substantive
 
@@ -174,22 +254,22 @@ def forward_motion(parts):
     circs = [circularity(t) for t in substantive if len(_words(t)) >= SUBSTANTIAL_WORDS]
     if circs:
         circ = sum(circs) / len(circs)
-        score = 10.0 * (0.5 * (1.0 - circ) + 0.5 * (nov if nov is not None else 0.5))
+        base = 0.5 * (1.0 - circ) + 0.5 * (nov if nov is not None else 0.5)
     elif nov is not None:
         circ = 0.0
-        score = 10.0 * nov
+        base = nov
     else:
         return None
-    score = round(score, 1)
+    spin = spinning(parts)
+    score = round(10.0 * base * (1.0 - 0.6 * spin["score"]), 1)
     label = "High" if score >= 7 else ("Moderate" if score >= 4 else "Low")
-    return {
-        "score": score,
-        "label": label,
-        "signals": {
-            "circularity": round(circ, 3),
-            "novelty": nov,
-        },
+    signals = {
+        "circularity": round(circ, 3),
+        "novelty": nov,
+        "spinning": spin["score"],
     }
+    signals.update(spin["signals"])
+    return {"score": score, "label": label, "signals": signals}
 
 
 def _norm_ts(value):

@@ -139,6 +139,20 @@ def coaching_tips(bd, repeats):
             tips.append(("novelty",
                          "Same ground covered repeatedly \u2014 name one thing "
                          "that's new since the last turn."))
+    spin = fs.get("spinning", 0) or 0
+    if spin > 0.3:
+        bits = []
+        if (fs.get("question_chains") or 0) >= 0.3:
+            bits.append("questions are coming back unanswered")
+        if (fs.get("circling_markers") or 0) >= 0.2:
+            bits.append("the same charges keep resurfacing")
+        if (fs.get("absolutist") or 0) >= 0.2:
+            bits.append("absolutes like \u201calways\u201d/\u201cnever\u201d "
+                        "are flying")
+        detail = "; ".join(bits) if bits else "the exchange is looping"
+        tips.append(("spinning",
+                     f"Going in circles \u2014 {detail}. Name the one thing "
+                     "this conversation needs to decide."))
     fmb = bd["fm_blended"]
     eng = bd["engagement"]
     if fmb and fmb["score"] < 4 <= eng["score"]:
@@ -156,9 +170,10 @@ def coaching_tips(bd, repeats):
         tips.append(("keep",
                      "Strong conversation \u2014 balanced, moving, landing. "
                      "Keep doing exactly this."))
-    order = {"thin": 0, "circularity": 1, "stuck": 2, "balance": 3,
-             "tone": 4, "interactivity": 5, "responsiveness": 6, "pace": 7,
-             "curiosity": 8, "depth": 9, "novelty": 10, "keep": 99}
+    order = {"thin": 0, "spinning": 1, "circularity": 2, "stuck": 3,
+             "balance": 4, "tone": 5, "interactivity": 6, "responsiveness": 7,
+             "pace": 8, "curiosity": 9, "depth": 10, "novelty": 11,
+             "keep": 99}
     tips.sort(key=lambda t: order.get(t[0], 50))
     return [t[1] for t in tips[:6]]
 
@@ -197,6 +212,10 @@ def _signal_rows(bd):
             rows.append({"domain": "Temporal \u00b7 forward motion",
                          "name": "Novelty",
                          "value": fm["signals"]["novelty"], "invert": False})
+        rows.append({"domain": "Temporal \u00b7 forward motion",
+                     "name": "Spinning",
+                     "value": fm["signals"].get("spinning", 0) or 0,
+                     "invert": True, "note": "lower is better"})
     return rows
 
 
@@ -318,6 +337,7 @@ footer{color:var(--muted);font-size:12px;margin:24px 0}
 <div class="sl"><label>Temporal weight</label><input type="range" id="sTmp" min="0" max="100" value="33"><span class="v" id="vTmp">33</span></div>
 <div class="sl"><label>Semantic weight</label><input type="range" id="sLlm" min="0" max="100" value="33"><span class="v" id="vLlm">33</span></div>
 <div class="meta">Engagement = weighted mean of the active domains. Equal weights reproduce the report scores.</div>
+<div class="meta">Without the semantic domain, forward motion is a structural read &mdash; it catches looping phrases, question chains and circling rhetoric, but not paraphrase-level restating. That last part is the LLM&rsquo;s half.</div>
 </div>
 <table><thead><tr><th>#</th><th>Conversation</th><th>Trend</th><th>Det</th><th>Temp</th><th>Engagement</th><th>Fwd motion</th><th>Why</th></tr></thead><tbody id="rankrows"></tbody></table>
 
@@ -353,7 +373,7 @@ function render(){
   var e=blendEng(c),f=blendFm(c);
   ch+='<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div><b style="font-size:16px">'+esc(c.title)+'</b><div class="meta">'+esc(c.date||"")+" \u00b7 "+c.nSubstantive+' substantive turns</div></div>'+sparkSvg(c.spark)+"</div>";
   ch+='<div class="tiles"><div class="tile"><div class="k">Engagement</div><div class="v">'+pill(e)+'</div><div class="s">Det '+num(c.det)+" \u00b7 Temp "+num(c.energy)+(W.llm?" \u00b7 LLM "+num(c.llmEng):"")+'</div></div>';
-  ch+='<div class="tile"><div class="k">Forward motion</div><div class="v">'+pill(f)+'</div><div class="s">'+(c.llmProgLabel?"LLM: "+esc(c.llmProgLabel):"deterministic only")+'</div></div>';
+  ch+='<div class="tile"><div class="k">Forward motion</div><div class="v">'+pill(f)+'</div><div class="s">'+(c.llmProgLabel?"LLM: "+esc(c.llmProgLabel):"structural signal only")+'</div></div>';
   ch+='<div class="tile"><div class="k">Tone</div><div class="v" style="font-size:18px">'+esc(c.toneDisplay)+'</div><div class="s">LLM only</div></div></div>';
   ch+="<div>"+c.signalRows.map(function(s){var good=s.invert?1-s.value:s.value;return '<div class="sig"><div class="row"><span><span class="dom">'+esc(s.domain)+" \u00b7 </span>"+esc(s.name)+(s.note?' <span class="dom">('+esc(s.note)+")</span>":"")+'</span><span>'+s.value.toFixed(2)+"</span></div>"+'<div class="bar"><i style="width:'+(s.value*100).toFixed(0)+"%;background:"+barColor(good)+'"></i></div></div>';}).join("")+"</div>";
   if(c.tips&&c.tips.length)ch+='<ul class="tips">'+c.tips.map(function(t){return "<li>"+esc(t)+"</li>";}).join("")+"</ul>";

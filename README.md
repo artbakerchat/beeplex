@@ -28,7 +28,9 @@ a second-opinion engagement score plus a one-line rationale per
 conversation, averaged with the deterministic score — and a
 tone/positivity rating (`Warm (8/10)`), which can't be done
 deterministically. Set `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) to enable it;
-`GEMINI_MODEL` overrides the model (default `gemini-3.5-flash`). With no key
+`GEMINI_MODEL` overrides the model (default `gemini-3.5-flash`). You can put
+the key in a `.env` file next to `family.py` (`GEMINI_API_KEY=...`) instead
+of exporting it — it's gitignored, so it never reaches the repo. With no key
 — or if the API fails — the deterministic score stands alone and the
 pipeline never breaks. Note: enabling this sends your transcript text to
 Google's API; the key lives only in your environment, never in the repo.
@@ -48,18 +50,26 @@ the per-utterance timestamps Bee provides — no API calls, no key:
   contribution to the deterministic depth signal)
 - **novelty**: share of each turn's phrases never seen before in the
   conversation (restating vs advancing)
+- **spinning**: structural signs of going in circles — questions answered
+  with questions, absolutist language ("you always/never", "exact same"),
+  circling rhetoric ("as I said", "don't even start", "for a change").
+  Reads the *shape* of the exchange, not its meaning: an argument that
+  restates one fight in fresh words scores novelty ~1.0 while going
+  nowhere, and spinning is the signal that catches it
 
 Pace + responsiveness form temporal **energy**, blended into Engagement as
 a third domain alongside the deterministic and LLM scores (mean of
-whichever domains are available). Circularity + novelty form **Forward
-Motion**, reported as its own axis: engagement measures the heat, forward
-motion measures whether the heat is cooking anything. A heated argument
-and a sharp debate can share an engagement score while splitting on
-forward motion. The LLM also rates progress 1–10 ("Spinning"…"Advancing")
-and blends with the deterministic forward-motion score; paraphrase-level
-going-in-circles can't be caught by word counting, so that half is the
-LLM's job. When timestamps are missing the temporal domain abstains and
-the other domains carry the score.
+whichever domains are available). Circularity + novelty form lexical
+motion, which spinning discounts multiplicatively — forward motion is
+10 × motion × (1 − spin penalty). On the sim scenarios the heated argument
+scores FM Moderate (6.8, spinning 0.51) while the product debate scores
+High (9.8, spinning 0.0): same heat, honestly different progress. The LLM
+also rates progress 1–10 ("Spinning"…"Advancing") and blends with the
+deterministic score; pure paraphrase-level restating — same point, fresh
+words, no circling rhetoric — can't be caught without semantics, so that
+last part is the LLM's half. The dashboard says so explicitly when no key
+is set: without the semantic domain, forward motion is labeled a
+structural read.
 
 ## Coaching dashboard (auto-generated)
 

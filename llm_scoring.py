@@ -15,14 +15,24 @@ also degrades silently to the deterministic score - the report pipeline
 never depends on the LLM.
 
 Privacy: enabling this sends your transcript text to Google's API. The key
-lives only in your environment - never in the repo, never in the reports.
+lives only in your environment or a gitignored .env file - never in the
+repo, never in the reports.
 
-No third-party dependencies: plain urllib against the Gemini REST API.
+No hard third-party dependencies: plain urllib against the Gemini REST API.
+python-dotenv is optional - if installed, a .env file in the working
+directory is loaded automatically.
 """
 
 import json
 import os
 import urllib.request
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # optional dependency; plain env vars still work
+    pass
+else:
+    load_dotenv()  # GEMINI_API_KEY from a .env file if present
 
 API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")

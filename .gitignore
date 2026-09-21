@@ -8,6 +8,3 @@ family/
 
 # Mic recordings made by simulator/record.py - your voice, never commit
 simulator/recordings/
-
-__pycache__/
-*.pyc

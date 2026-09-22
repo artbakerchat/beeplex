@@ -1,0 +1,298 @@
+From 32faebca79516ad33c8b6a5abd8b4e61d025815c Mon Sep 17 00:00:00 2001
+From: artbakerchat <artbakerchat@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 19:16:28 -0700
+Subject: [PATCH] moments.json: give Bee something to actually remember
+
+Scores give the persona the shape of your days but nothing to remember
+about them. Every live run now records one line per conversation in
+family/moments.json - the phrase it kept circling, or a fragment of what
+was said. Keepsakes carry their notes, the diary voices (deterministic
+and LLM) draw on recent memories. Live runs only; mock never records.
+Local, gitignored, never a transcript.
+---
+ README.md      |   7 +++
+ bee_persona.py | 156 ++++++++++++++++++++++++++++++++++++++++++-------
+ dashboard.py   |   4 ++
+ 3 files changed, 146 insertions(+), 21 deletions(-)
+
+diff --git a/README.md b/README.md
+index 39291e1..818845b 100644
+--- a/README.md
++++ b/README.md
+@@ -159,6 +159,13 @@ With an LLM configured, the same Gemini → Bedrock Nova provider chain
+ writes the entry in Bee's voice; without one, deterministic templates
+ carry it. Reading mode — it never appends to the history.
+ 
++Scores alone give Bee the *shape* of your days, so every live run also
++records one remembered line per conversation in `family/moments.json` —
++the phrase it kept circling, or a fragment of what was actually said.
++Never a transcript, just enough for Bee to remember *about* your days
++rather than only their rhythms. Pocketed keepsakes and the diary entry
++both draw on it. Local and gitignored like everything in `family/`.
++
+ The standing rules of the voice: witness, not participant (loyal,
+ observant, never judgmental); collects moments the way bees collect
+ pollen; never nags, never therapy-speak; and honest about not knowing —
+diff --git a/bee_persona.py b/bee_persona.py
+index b07011b..b5903af 100644
+--- a/bee_persona.py
++++ b/bee_persona.py
+@@ -4,9 +4,12 @@ Scoring reads HOW people talk, clinical reads WHAT was said, persona is
+ WHO was listening. Bee has no default personality - it grows one from
+ what it hears. ``derive_persona()`` is a pure function of the
+ longitudinal history (``family/history.json``): the longer Bee listens,
+-the more defined its character becomes. A Bee raised on dinner-table
+-debates is wry and steady; one raised on quiet evenings is gentle and
+-comfortable with silence. A brand-new Bee is curious and tentative.
++the more defined its character becomes. Scores give it the shape of your
++days; ``family/moments.json`` - one remembered line per conversation,
++recorded on live runs - gives it something to actually remember about
++them. A Bee raised on dinner-table debates is wry and steady; one raised
++on quiet evenings is gentle and comfortable with silence. A brand-new Bee
++is curious and tentative.
+ 
+ The persona then speaks: ``run_persona()`` fetches today's
+ conversations, renders a first-person diary entry in Bee's voice, and
+@@ -29,6 +32,8 @@ from datetime import date, datetime, timezone
+ from pathlib import Path
+ 
+ OUTPUT_DIR = Path(__file__).resolve().parent / "family"
++MOMENTS_PATH = OUTPUT_DIR / "moments.json"
++MAX_MOMENTS = 500
+ 
+ # ---------------------------------------------------------------------------
+ # Persona derivation: who Bee has become, from what it has heard.
+@@ -39,12 +44,15 @@ def _mean(vals):
+     return sum(vals) / len(vals) if vals else None
+ 
+ 
+-def derive_persona(history):
+-    """Derive Bee's grown personality from the longitudinal history.
++def derive_persona(history, moments=None):
++    """Derive Bee's grown personality from the listening history.
+ 
+-    ``history`` is the ``family/history.json`` dict (``{"runs": [...]}``).
++    ``history`` is the ``family/history.json`` dict (``{"runs": [...]}``);
++    ``moments`` is the ``family/moments.json`` dict (``{"moments": [...]}``),
++    optional - without it keepsakes fall back to bare history titles.
+     Returns a JSON-serializable persona dict: maturity, temperament,
+-    notices (learned habits), keepsakes (pocketed moments), and counts.
++    notices (learned habits), keepsakes (pocketed moments, each with its
++    note), recent memories, and counts.
+     Pure function - no state of its own; the persona IS the history.
+     """
+     runs = history.get("runs", []) if isinstance(history, dict) else []
+@@ -112,27 +120,48 @@ def derive_persona(history):
+         notices.append("lopsided")
+ 
+     # Keepsakes: the moments Bee pocketed - highest tone, else highest
+-    # engagement. Title only; the history keeps no transcripts.
+-    def _keepsake_key(c):
+-        tone = c.get("tone")
+-        eng = c.get("engagement") or 0
+-        return ((tone if tone is not None else -1), eng)
++    # engagement. Each carries its note, so a keepsake is a memory, not
++    # just a title. Falls back to bare history titles when no moments
++    # have been recorded yet.
++    mem_list = (moments.get("moments", [])
++                if isinstance(moments, dict) else [])
++
++    def _keepsake_key(m):
++        tone = m.get("tone")
++        return ((tone if tone is not None else -1), m.get("engagement") or 0)
+ 
+-    seen = set()
+     keepsakes = []
+-    for c in sorted(convs, key=_keepsake_key, reverse=True):
+-        t = c.get("title")
++    seen = set()
++    for m in sorted(mem_list, key=_keepsake_key, reverse=True):
++        t = m.get("title")
+         if t and t not in seen:
+             seen.add(t)
+-            keepsakes.append(t)
++            keepsakes.append({"title": t, "note": m.get("note") or ""})
+         if len(keepsakes) == 3:
+             break
++    if not keepsakes:
++        def _hist_key(c):
++            tone = c.get("tone")
++            eng = c.get("engagement") or 0
++            return ((tone if tone is not None else -1), eng)
++
++        for c in sorted(convs, key=_hist_key, reverse=True):
++            t = c.get("title")
++            if t and t not in seen:
++                seen.add(t)
++                keepsakes.append({"title": t, "note": ""})
++            if len(keepsakes) == 3:
++                break
++
++    memories = [{"title": m.get("title"), "note": m.get("note")}
++                for m in mem_list[-8:]]
+ 
+     return {
+         "maturity": maturity,
+         "temperament": temperament,
+         "notices": notices,
+         "keepsakes": keepsakes,
++        "memories": memories,
+         "days_listening": days,
+         "n_runs": n_runs,
+         "n_conversations": len(convs),
+@@ -151,6 +180,79 @@ def persona_card(persona):
+     return "Bee: " + " \u00b7 ".join(bits)
+ 
+ 
++# ---------------------------------------------------------------------------
++# Moments: what Bee remembers. Scores tell it the shape of your days;
++# moments give it something to actually remember about them.
++# ---------------------------------------------------------------------------
++
++def _load_moments():
++    import json
++    try:
++        data = json.loads(MOMENTS_PATH.read_text())
++        if isinstance(data, dict) and isinstance(data.get("moments"), list):
++            return data
++    except (OSError, ValueError):
++        pass
++    return {"moments": []}
++
++
++def _save_moments(moments):
++    import json
++    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
++    MOMENTS_PATH.write_text(json.dumps(moments, indent=1))
++
++
++def _moment_note(parts, bd):
++    """One line about what a conversation was about.
++
++    No transcript - just the gist: the phrase it kept circling, or the
++    longest substantive turn's opening, or the quiet itself. This is the
++    raw material of Bee's memory.
++    """
++    from temporal_scoring import top_repeats
++    repeats = top_repeats(parts, limit=2)
++    if repeats:
++        phrase, _ = repeats[0]
++        extra = f" (and \u2018{repeats[1][0]}\u2019)" if len(repeats) > 1 else ""
++        return f"kept coming back to \u2018{phrase}\u2019{extra}"
++    # Otherwise keep the longest turn's opening - a fragment of what was
++    # actually said is the most honest memory there is.
++    candidates = [t for _, t in parts if len(t.split()) >= 8]
++    if candidates:
++        best = max(candidates, key=len)
++        snippet = best[:110].rsplit(" ", 1)[0]
++        return f"\u201c{snippet}...\u201d"
++    if bd.get("n_substantive", 0) <= 2:
++        return "barely a few words, mostly quiet"
++    return "nothing in particular stood out"
++
++
++def record_moments(entries, ts):
++    """Append one memory per conversation to family/moments.json.
++
++    Called on live runs only - mock/demo runs never record. Each moment
++    is a title plus a one-line note about what it was about; scores ride
++    along so the persona can choose which moments to pocket. Local and
++    gitignored like everything in family/; never a transcript.
++    """
++    moments = _load_moments()
++    for e in entries:
++        parts = e.get("parts") or []
++        bd = e.get("breakdown") or {}
++        eng = (bd.get("engagement") or {}).get("score")
++        tone = (bd.get("llm") or {}).get("tone")
++        moments["moments"].append({
++            "ts": ts,
++            "id": e.get("id"),
++            "title": e.get("title"),
++            "note": _moment_note(parts, bd),
++            "engagement": eng,
++            "tone": tone,
++        })
++    moments["moments"] = moments["moments"][-MAX_MOMENTS:]
++    _save_moments(moments)
++
++
+ # ---------------------------------------------------------------------------
+ # Deterministic voice: Bee speaks even with no LLM key.
+ # ---------------------------------------------------------------------------
+@@ -282,9 +384,13 @@ def render_entry(persona, today, seed=0):
+ 
+     if persona["keepsakes"]:
+         keep = persona["keepsakes"][0]
+-        if not any(keep in l for l in lines):
+-            lines.append(f"I've still got \u201c{keep}\u201d pocketed from before. "
+-                         f"Some moments I don't let go of.")
++        if not any(keep["title"] in l for l in lines):
++            if keep.get("note"):
++                lines.append(f"I've still got \u201c{keep['title']}\u201d pocketed "
++                             f"\u2014 {keep['note']}. Some moments I don't let go of.")
++            else:
++                lines.append(f"I've still got \u201c{keep['title']}\u201d pocketed from "
++                             f"before. Some moments I don't let go of.")
+ 
+     quiet_titles = [c["title"] for kind, c in salient if kind == "quiet"]
+     if quiet_titles and rng.random() < 0.5:
+@@ -306,6 +412,7 @@ Who you have become, from {days} days of listening ({n_conv} conversations heard
+ - temperament: {temperament} ({temperament_note})
+ - patterns you have learned to notice: {notices}
+ - moments you have pocketed and kept: {keepsakes}
++- things you remember about recent days: {memories}
+ 
+ Tonight's conversations:
+ {blocks}
+@@ -364,8 +471,14 @@ def llm_entry(persona, today):
+     if not available() or not today:
+         return None
+     notices = ", ".join(persona["notices"]) if persona["notices"] else "none yet"
+-    keepsakes = ("; ".join(f'"{k}"' for k in persona["keepsakes"])
++    keepsakes = ("; ".join(f'"{k["title"]}": {k["note"]}' if k.get("note")
++                           else f'"{k["title"]}"'
++                           for k in persona["keepsakes"])
+                  if persona["keepsakes"] else "none yet")
++    mems = persona.get("memories") or []
++    memories = ("; ".join(f'"{m["title"]}": {m["note"]}' for m in mems
++                          if m.get("title") and m.get("note"))
++                if mems else "nothing yet")
+     prompt = _PERSONA_PROMPT.format(
+         days=persona["days_listening"],
+         n_conv=persona["n_conversations"],
+@@ -375,6 +488,7 @@ def llm_entry(persona, today):
+         temperament_note=_TEMPERAMENT_NOTES[persona["temperament"]],
+         notices=notices,
+         keepsakes=keepsakes,
++        memories=memories,
+         blocks="\n".join(_conv_block(c) for c in today),
+     )
+     text = llm_text(prompt, max_output_tokens=600, temperature=0.7)
+@@ -396,7 +510,7 @@ def run_persona(limit=3):
+     from llm_scoring import llm_engagement_batch
+ 
+     history = _load_history()
+-    persona = derive_persona(history)
++    persona = derive_persona(history, _load_moments())
+ 
+     today = []
+     if bf.MOCK_FORCED or not bf.cli_available() or not bf.is_authenticated():
+diff --git a/dashboard.py b/dashboard.py
+index 4a249fe..c0beb19 100644
+--- a/dashboard.py
++++ b/dashboard.py
+@@ -282,6 +282,10 @@ def record_run(entries, info):
+         })
+         history["runs"] = history["runs"][-MAX_RUNS:]
+         _save_history(history)
++        # Bee's memory: one line per conversation about what it was
++        # about. Live runs only; mock/demo runs never record.
++        from bee_persona import record_moments
++        record_moments(entries, now.isoformat())
+     cards = [_make_card(e, history) for e in entries]
+     _write_dashboard(cards, info, history, now)
+ 
+-- 
+2.43.0
+

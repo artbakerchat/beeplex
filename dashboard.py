@@ -282,6 +282,10 @@ def record_run(entries, info):
         })
         history["runs"] = history["runs"][-MAX_RUNS:]
         _save_history(history)
+        # Bee's memory: one line per conversation about what it was
+        # about. Live runs only; mock/demo runs never record.
+        from bee_persona import record_moments
+        record_moments(entries, now.isoformat())
     cards = [_make_card(e, history) for e in entries]
     _write_dashboard(cards, info, history, now)
 

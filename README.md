@@ -159,6 +159,13 @@ With an LLM configured, the same Gemini → Bedrock Nova provider chain
 writes the entry in Bee's voice; without one, deterministic templates
 carry it. Reading mode — it never appends to the history.
 
+Scores alone give Bee the *shape* of your days, so every live run also
+records one remembered line per conversation in `family/moments.json` —
+the phrase it kept circling, or a fragment of what was actually said.
+Never a transcript, just enough for Bee to remember *about* your days
+rather than only their rhythms. Pocketed keepsakes and the diary entry
+both draw on it. Local and gitignored like everything in `family/`.
+
 The standing rules of the voice: witness, not participant (loyal,
 observant, never judgmental); collects moments the way bees collect
 pollen; never nags, never therapy-speak; and honest about not knowing —

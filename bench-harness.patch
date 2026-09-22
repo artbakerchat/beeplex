@@ -1,0 +1,396 @@
+From 309d593ab7cba016e91351f66c3971f7669fb6b7 Mon Sep 17 00:00:00 2001
+From: artbakerchat <artbakerchat@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 18:55:09 -0700
+Subject: [PATCH] scoring test harness: bench.py + README docs
+
+---
+ README.md |  20 +++++
+ bench.py  | 239 ++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ muse.xlsx | Bin 0 -> 7024 bytes
+ 3 files changed, 259 insertions(+)
+ create mode 100644 bench.py
+ create mode 100644 muse.xlsx
+
+diff --git a/README.md b/README.md
+index 9a66e53..41bf304 100644
+--- a/README.md
++++ b/README.md
+@@ -165,6 +165,26 @@ fake CLI spaces utterance timestamps by estimated speech time plus the
+ pause, like real Bee captures. `SIM_BEE_FAIL_AUTH=1` simulates a logged-out CLI (tests the
+ mock fallback); `SIM_BEE_EMPTY=1` returns zero conversations.
+ 
++## Scoring test harness
++
++`bench.py` benchmarks candidate engagement formulas against the same fixed
++fixtures, so a new formula is judged on the simulator scenarios instead of
++gut feel. One command runs everything:
++
++    python3 bench.py
++
++It reads `simulator/conversations.json` read-only and prints a
++scenario-by-formula score table plus a "where the baseline misses" summary.
++Ships with the naive utterance-count heuristic as the baseline anchor and
++three seed alternates (talk balance, question rate, turn length). Register a
++new formula with a few lines at the bottom of `bench.py`:
++
++    def my_formula(utterances):
++        ...
++        return score  # 0..10
++
++    register("my_formula", my_formula)
++
+ ### Recording from your microphone
+ 
+ `simulator/record.py` simulates what the Bee device itself does — capture
+diff --git a/bench.py b/bench.py
+new file mode 100644
+index 0000000..06ba6ba
+--- /dev/null
++++ b/bench.py
+@@ -0,0 +1,239 @@
++#!/usr/bin/env python3
++"""bench.py - one-command engagement-scoring test harness.
++
++Runs every registered scoring formula over every conversation in
++simulator/conversations.json and prints a side-by-side comparison, so new
++formulas can be judged against the same fixed fixtures instead of gut feel.
++
++Usage:
++    python3 bench.py
++
++The fixture file is opened read-only; the harness never writes to it.
++Recorded audio and transcripts under simulator/recordings/ are never touched.
++
++Formulas
++--------
++Each formula is a function taking a list of utterance dicts
++({speaker, text, pause_s, ...}) and returning a score from 0 to 10
++(or None when the formula cannot score the conversation, e.g. no speaker
++labels for a balance-based formula).
++
++Ships with:
++  utterance_count  baseline - the naive heuristic: raw utterance count,
++                   20+ utterances = 10. Every comparison keeps this anchor.
++  talk_balance     seed alternate - how evenly word share splits across
++                   speakers (50/50 = 10, one-sided = 0).
++  question_rate    seed alternate - share of substantive turns that ask a
++                   question (30% = 10).
++  turn_length      seed alternate - mean words per substantive turn
++                   (20+ words = 10).
++
++Register your own with a few lines at the bottom of this file:
++
++    def my_formula(utterances):
++        ...
++        return score  # 0..10
++
++    register("my_formula", my_formula)
++
++For example, to benchmark the repo's current deterministic scorer:
++
++    from bee_fetcher import engagement_signals
++
++    def current_deterministic(utterances):
++        parts = [(u.get("speaker") or "", u["text"]) for u in utterances]
++        return engagement_signals(parts)["score"]
++
++    register("current_deterministic", current_deterministic)
++"""
++
++import json
++import os
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++FIXTURES = os.path.join(HERE, "simulator", "conversations.json")
++
++BACKCHANNELS = {
++    "yeah", "yep", "yes", "no", "nope", "ok", "okay", "uh-huh", "mm-hmm",
++    "hmm", "right", "sure", "thanks", "thank you", "bye", "hello", "hi",
++}
++
++
++# ---------------------------------------------------------------------------
++# Shared helpers (local copies so the harness has zero repo-module imports)
++# ---------------------------------------------------------------------------
++
++def _words(text):
++    return text.split()
++
++
++def _is_substantive(text):
++    if len(_words(text)) <= 3:
++        return False
++    cleaned = text.strip().strip(".,!?;:\"'").lower()
++    return cleaned not in BACKCHANNELS
++
++
++def _substantive(utterances):
++    return [u for u in utterances if _is_substantive(u.get("text", ""))]
++
++
++# ---------------------------------------------------------------------------
++# Formula registry
++# ---------------------------------------------------------------------------
++
++FORMULAS = {}
++FORMULA_ORDER = []
++
++
++def register(name, fn):
++    """Register a scoring formula. fn(utterances) -> 0..10 (or None)."""
++    if name in FORMULAS:
++        raise ValueError("formula %r already registered" % name)
++    FORMULAS[name] = fn
++    FORMULA_ORDER.append(name)
++
++
++# ---------------------------------------------------------------------------
++# Shipped formulas
++# ---------------------------------------------------------------------------
++
++def utterance_count(utterances):
++    """Baseline: the naive utterance-count heuristic. 20+ utterances = 10."""
++    return round(min(10.0, len(utterances) / 20.0 * 10.0), 1)
++
++
++def talk_balance(utterances):
++    """Seed alternate: word-share balance across speakers. 50/50 = 10.
++
++    Returns None when fewer than two speakers are labeled.
++    """
++    counts = {}
++    for u in _substantive(utterances):
++        speaker = u.get("speaker")
++        if speaker:
++            counts[speaker] = counts.get(speaker, 0) + len(_words(u["text"]))
++    if len(counts) < 2:
++        return None
++    total = sum(counts.values()) or 1
++    shares = sorted(w / total for w in counts.values())
++    if len(shares) == 2:
++        balance = 1.0 - (shares[-1] - shares[0])
++    else:
++        balance = min(1.0, shares[0] * len(shares))
++    return round(max(0.0, balance) * 10.0, 1)
++
++
++def question_rate(utterances):
++    """Seed alternate: share of substantive turns asking a question. 30% = 10."""
++    subs = _substantive(utterances)
++    if not subs:
++        return 0.0
++    questions = sum(1 for u in subs if u["text"].rstrip().endswith("?"))
++    return round(min(1.0, questions / (len(subs) * 0.3)) * 10.0, 1)
++
++
++def turn_length(utterances):
++    """Seed alternate: mean words per substantive turn. 20+ words = 10."""
++    subs = _substantive(utterances)
++    if not subs:
++        return 0.0
++    avg = sum(len(_words(u["text"])) for u in subs) / len(subs)
++    return round(min(1.0, avg / 20.0) * 10.0, 1)
++
++
++register("utterance_count", utterance_count)
++register("talk_balance", talk_balance)
++register("question_rate", question_rate)
++register("turn_length", turn_length)
++
++# Add your own formulas here with register("name", fn).
++
++
++# ---------------------------------------------------------------------------
++# Runner
++# ---------------------------------------------------------------------------
++
++def _short_name(conv):
++    cid = conv.get("id", "?")
++    return cid[4:] if cid.startswith("sim_") else cid
++
++
++def _load_fixtures():
++    with open(FIXTURES, "r", encoding="utf-8") as f:  # read-only
++        convs = json.load(f)
++    return convs
++
++
++def run():
++    convs = _load_fixtures()
++    rows = []
++    for conv in convs:
++        utterances = conv.get("utterances", [])
++        scores = {}
++        for name in FORMULA_ORDER:
++            try:
++                scores[name] = FORMULAS[name](utterances)
++            except Exception as e:  # a broken formula must not kill the run
++                scores[name] = "ERR:%s" % e
++        rows.append((_short_name(conv), len(utterances), scores))
++    return rows
++
++
++def _fmt(score):
++    if score is None:
++        return "n/a"
++    if isinstance(score, str):
++        return score
++    return "%.1f" % score
++
++
++def report(rows):
++    names = FORMULA_ORDER
++    label_w = max(len(r[0]) for r in rows + [("scenario", 0, {})]) + 2
++    col_w = max(max(len(n) for n in names), 5) + 2
++
++    lines = []
++    header = "scenario".ljust(label_w) + "".join(n.ljust(col_w) for n in names)
++    lines.append(header)
++    lines.append("-" * len(header))
++    for label, n_utt, scores in rows:
++        line = label.ljust(label_w)
++        line += "".join(_fmt(scores[n]).ljust(col_w) for n in names)
++        lines.append(line)
++
++    # Where the baseline anchor disagrees with the alternates.
++    lines.append("")
++    lines.append("Where the utterance-count baseline misses:")
++    base = names[0]
++    for label, n_utt, scores in rows:
++        numeric = {n: s for n, s in scores.items()
++                   if isinstance(s, (int, float))}
++        if base not in numeric or len(numeric) < 2:
++            continue
++        others = {n: s for n, s in numeric.items() if n != base}
++        hi = max(others, key=others.get)
++        lo = min(others, key=others.get)
++        b = numeric[base]
++        if b >= max(others.values()):
++            verdict = "baseline scores it HIGHEST"
++        elif b <= min(others.values()):
++            verdict = "baseline scores it LOWEST"
++        else:
++            verdict = "baseline in the middle"
++        lines.append("  %-16s baseline %s - %s (%s: %s, %s: %s)"
++                     % (label, _fmt(b), verdict, hi, _fmt(others[hi]),
++                        lo, _fmt(others[lo])))
++    return "\n".join(lines)
++
++
++def main():
++    rows = run()
++    print(report(rows))
++    print("")
++    print("%d scenarios x %d formulas (fixtures read-only: %s)"
++          % (len(rows), len(FORMULA_ORDER), FIXTURES))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/muse.xlsx b/muse.xlsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..03c0484031686de8643d3e2babedbc066ec5d8f6
+GIT binary patch
+literal 7024
+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
+
+literal 0
+HcmV?d00001
+
+-- 
+2.43.0
+

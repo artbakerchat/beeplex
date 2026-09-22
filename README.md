@@ -165,6 +165,26 @@ fake CLI spaces utterance timestamps by estimated speech time plus the
 pause, like real Bee captures. `SIM_BEE_FAIL_AUTH=1` simulates a logged-out CLI (tests the
 mock fallback); `SIM_BEE_EMPTY=1` returns zero conversations.
 
+## Scoring test harness
+
+`bench.py` benchmarks candidate engagement formulas against the same fixed
+fixtures, so a new formula is judged on the simulator scenarios instead of
+gut feel. One command runs everything:
+
+    python3 bench.py
+
+It reads `simulator/conversations.json` read-only and prints a
+scenario-by-formula score table plus a "where the baseline misses" summary.
+Ships with the naive utterance-count heuristic as the baseline anchor and
+three seed alternates (talk balance, question rate, turn length). Register a
+new formula with a few lines at the bottom of `bench.py`:
+
+    def my_formula(utterances):
+        ...
+        return score  # 0..10
+
+    register("my_formula", my_formula)
+
 ### Recording from your microphone
 
 `simulator/record.py` simulates what the Bee device itself does — capture

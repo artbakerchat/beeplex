@@ -1,9 +1,46 @@
-# BeePlex — Bee wearable transcript reports
+# BeePlex — Quick Bees
 
-Generates Word (action log), Excel (metrics), and PowerPoint (insights) reports
-from your Bee wearable conversations.
+1. Prerequisites
 
-.gitattributes, * text=auto eol=lf
+Python 3.12, git
+Bee CLI installed (for live data — without it everything still runs on mock/sim data)
+Optional: a GEMINI_API_KEY for LLM scoring; AWS credentials for the my-agent conversational agent
+
+2. Clone and set up
+
+git clone https://github.com/artbakerchat/beeplex.git
+cd beeplex/my-agent
+./setup.sh — creates the shared .venv, installs all dependencies (report libs + agent libs), checks the Bee CLI and AWS creds
+
+3. Try it with no hardware (simulator)
+
+cd beeplex → ./simulator/run.sh
+Exercises the real pipeline on 9 scripted scenarios: fetch → score → reports
+Outputs land in family/: Word/Excel/PowerPoint reports + dashboard.html (coaching dashboard)
+
+4. Go live with your Bee
+
+bee login
+my-agent/.venv/bin/python family.py — pulls today's real conversations, scores them, writes fresh reports and refreshes the dashboard
+
+5. Add the LLM layer (optional)
+
+Put GEMINI_API_KEY=... in a .env file next to family.py
+Next family.py run: Gemini scores engagement/meaning and writes the one-sentence memory per conversation (Bedrock Nova is the automatic fallback)
+
+6. Meet Bee
+
+my-agent/.venv/bin/python bee_fetcher.py --persona — prints tonight's diary entry and saves family/Bee_YYYY-MM-DD.md
+The persona deepens with every family.py run (history + moments accumulate)
+
+7. Use the copilot (my-agent)
+
+Web console, no AWS needed: cd my-agent → streamlit run ui/app.py — tabs for Conversations, Scores, Report, Diary, Picker
+Conversational agent: agentcore dev (needs AWS creds, Nova Micro in ca-central-1) — ask "How engaging were my conversations today?" or "What did Bee write about today?"
+
+8. Clinical mode (separate track)
+
+my-agent/.venv/bin/python bee_fetcher.py --clinical — doctor-visit summaries. Deliberately not wired into my-agent.
 
 ## Bee CLI integration
 

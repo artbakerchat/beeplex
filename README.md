@@ -3,6 +3,8 @@
 Generates Word (action log), Excel (metrics), and PowerPoint (insights) reports
 from your Bee wearable conversations.
 
+.gitattributes, * text=auto eol=lf
+
 ## Bee CLI integration
 
 `bee_fetcher.py` pulls real conversation data through the official Bee CLI:

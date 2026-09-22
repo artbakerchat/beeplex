@@ -1,0 +1,120 @@
+From 0e56d4e00992b2cd7afdda131e714e7acbd81fff Mon Sep 17 00:00:00 2001
+From: artbakerchat <artbakerchat@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 19:55:59 -0700
+Subject: [PATCH] semantic moments: LLM writes a one-sentence memory per
+ conversation
+
+The batch scoring prompt gains a fifth field - a one-sentence MEMORY of
+what each conversation was about. Same single API call per run, zero
+extra cost; the semantic note wins over the deterministic fallback
+(looped phrase / turn fragment / quiet) when present. Parser treats it
+as optional, so old-format replies and no-key runs are untouched.
+---
+ README.md      |  5 ++++-
+ bee_persona.py | 13 ++++++++++---
+ llm_scoring.py | 17 ++++++++++++-----
+ 3 files changed, 26 insertions(+), 9 deletions(-)
+
+diff --git a/README.md b/README.md
+index 818845b..dd79fb8 100644
+--- a/README.md
++++ b/README.md
+@@ -162,7 +162,10 @@ carry it. Reading mode — it never appends to the history.
+ Scores alone give Bee the *shape* of your days, so every live run also
+ records one remembered line per conversation in `family/moments.json` —
+ the phrase it kept circling, or a fragment of what was actually said.
+-Never a transcript, just enough for Bee to remember *about* your days
++When an LLM is configured, the same single batch call that scores the
++run also writes a one-sentence semantic memory of what each conversation
++was *about* — that wins over the deterministic note, at zero extra API
++cost. Never a transcript, just enough for Bee to remember *about* your days
+ rather than only their rhythms. Pocketed keepsakes and the diary entry
+ both draw on it. Local and gitignored like everything in `family/`.
+ 
+diff --git a/bee_persona.py b/bee_persona.py
+index b5903af..50d0348 100644
+--- a/bee_persona.py
++++ b/bee_persona.py
+@@ -205,10 +205,17 @@ def _save_moments(moments):
+ def _moment_note(parts, bd):
+     """One line about what a conversation was about.
+ 
+-    No transcript - just the gist: the phrase it kept circling, or the
+-    longest substantive turn's opening, or the quiet itself. This is the
+-    raw material of Bee's memory.
++    When the LLM batch ran, its one-sentence semantic memory wins - it
++    knows what the conversation was *about*, which word counting can't.
++    Otherwise the deterministic chain: the phrase it kept circling, the
++    longest turn's opening, or the quiet itself. Never a transcript -
++    just the gist. This is the raw material of Bee's memory.
+     """
++    llm_moment = ((bd.get("llm") or {}).get("moment") or "").strip()
++    if llm_moment:
++        if len(llm_moment) > 220:
++            llm_moment = llm_moment[:220].rsplit(" ", 1)[0] + "\u2026"
++        return llm_moment
+     from temporal_scoring import top_repeats
+     repeats = top_repeats(parts, limit=2)
+     if repeats:
+diff --git a/llm_scoring.py b/llm_scoring.py
+index 84c9c77..b14bd9f 100644
+--- a/llm_scoring.py
++++ b/llm_scoring.py
+@@ -1,10 +1,11 @@
+ """Optional LLM enrichment for beeplex engagement scoring.
+ 
+ Sends conversation transcripts to an LLM for a second-opinion engagement
+-score plus a one-line rationale, a tone/positivity rating, and a progress
++score plus a one-line rationale, a tone/positivity rating, a progress
+ rating (is the conversation advancing or going in circles -
+ paraphrase-level restating can't be caught deterministically, so this is
+-the LLM's job).
++the LLM's job), and a one-sentence semantic memory of what the
++conversation was about (the "moment" Bee keeps in moments.json).
+ 
+ Two providers, one shared prompt. Gemini is tried first when
+ ``GEMINI_API_KEY`` (or ``GOOGLE_API_KEY``) is set; if it is missing or the
+@@ -64,8 +65,9 @@ For EACH conversation below:
+ 2. Rate TONE 1-10 (1 = hostile, 10 = warm) and give it a one-word label (e.g. Warm, Friendly, Neutral, Tense, Hostile, Playful).
+ 3. Give a one-sentence rationale for the engagement score.
+ 4. Rate PROGRESS 1-10 (1 = going in circles, restating the same points; 10 = every turn advances: new points, decisions, building on what was said) and give it a one-word label (e.g. Advancing, Building, Circling, Spinning, Stalled).
++5. Write a one-sentence MEMORY of what this conversation was about - concrete and specific: who was talking, what topic, what happened or was decided (e.g. "A tense argument about the credit card bill that ended unresolved"). Plain words, no jargon, no therapy-speak. This becomes the private note Bee keeps to remember the day by.
+ Reply with ONLY a JSON object mapping each conversation number to its scores, no other text, e.g.:
+-{"0": {"engagement": 8, "rationale": "...", "tone": 6, "tone_label": "Neutral", "progress": 7, "progress_label": "Advancing"}, "1": {"engagement": 3, "rationale": "...", "tone": 8, "tone_label": "Warm", "progress": 4, "progress_label": "Circling"}}
++{"0": {"engagement": 8, "rationale": "...", "tone": 6, "tone_label": "Neutral", "progress": 7, "progress_label": "Advancing", "moment": "You and Maya planning the lake house trip for August, still arguing about the dates"}, "1": {"engagement": 3, "rationale": "...", "tone": 8, "tone_label": "Warm", "progress": 4, "progress_label": "Circling", "moment": "..."}}
+ 
+ Conversations:
+ {blocks}"""
+@@ -181,6 +183,9 @@ def _parse_batch(text, items):
+             "tone_label": str(entry.get("tone_label", "")).strip(),
+             "progress": _valid_score(entry.get("progress")),
+             "progress_label": str(entry.get("progress_label", "")).strip(),
++            # Semantic memory: optional - a missing/empty moment just means
++            # the caller falls back to the deterministic note.
++            "moment": str(entry.get("moment", "")).strip(),
+         }
+     return results
+ 
+@@ -191,7 +196,8 @@ def llm_engagement_batch(items):
+     ``items`` is [(key, parts)] with ``parts`` as [(speaker, text)].
+     Returns {key: {"engagement": float, "rationale": str,
+                    "tone": float|None, "tone_label": str,
+-                   "progress": float|None, "progress_label": str}}.
++                   "progress": float|None, "progress_label": str,
++                   "moment": str}}.
+     Keys with no valid engagement score are omitted, so callers fall back
+     to the deterministic score for those conversations.
+ 
+@@ -235,7 +241,8 @@ def llm_engagement(parts):
+ 
+     Returns {"engagement": float|None, "rationale": str,
+              "tone": float|None, "tone_label": str,
+-             "progress": float|None, "progress_label": str} -
++             "progress": float|None, "progress_label": str,
++             "moment": str} -
+     or None when no provider is configured, the transcript is empty, or
+     the requests fail. Partial results are kept: a valid engagement score
+     is returned even if the tone fields are missing/invalid.
+-- 
+2.43.0
+

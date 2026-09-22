@@ -162,7 +162,10 @@ carry it. Reading mode — it never appends to the history.
 Scores alone give Bee the *shape* of your days, so every live run also
 records one remembered line per conversation in `family/moments.json` —
 the phrase it kept circling, or a fragment of what was actually said.
-Never a transcript, just enough for Bee to remember *about* your days
+When an LLM is configured, the same single batch call that scores the
+run also writes a one-sentence semantic memory of what each conversation
+was *about* — that wins over the deterministic note, at zero extra API
+cost. Never a transcript, just enough for Bee to remember *about* your days
 rather than only their rhythms. Pocketed keepsakes and the diary entry
 both draw on it. Local and gitignored like everything in `family/`.
 

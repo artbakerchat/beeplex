@@ -1,10 +1,11 @@
 """Optional LLM enrichment for beeplex engagement scoring.
 
 Sends conversation transcripts to an LLM for a second-opinion engagement
-score plus a one-line rationale, a tone/positivity rating, and a progress
+score plus a one-line rationale, a tone/positivity rating, a progress
 rating (is the conversation advancing or going in circles -
 paraphrase-level restating can't be caught deterministically, so this is
-the LLM's job).
+the LLM's job), and a one-sentence semantic memory of what the
+conversation was about (the "moment" Bee keeps in moments.json).
 
 Two providers, one shared prompt. Gemini is tried first when
 ``GEMINI_API_KEY`` (or ``GOOGLE_API_KEY``) is set; if it is missing or the
@@ -64,8 +65,9 @@ For EACH conversation below:
 2. Rate TONE 1-10 (1 = hostile, 10 = warm) and give it a one-word label (e.g. Warm, Friendly, Neutral, Tense, Hostile, Playful).
 3. Give a one-sentence rationale for the engagement score.
 4. Rate PROGRESS 1-10 (1 = going in circles, restating the same points; 10 = every turn advances: new points, decisions, building on what was said) and give it a one-word label (e.g. Advancing, Building, Circling, Spinning, Stalled).
+5. Write a one-sentence MEMORY of what this conversation was about - concrete and specific: who was talking, what topic, what happened or was decided (e.g. "A tense argument about the credit card bill that ended unresolved"). Plain words, no jargon, no therapy-speak. This becomes the private note Bee keeps to remember the day by.
 Reply with ONLY a JSON object mapping each conversation number to its scores, no other text, e.g.:
-{"0": {"engagement": 8, "rationale": "...", "tone": 6, "tone_label": "Neutral", "progress": 7, "progress_label": "Advancing"}, "1": {"engagement": 3, "rationale": "...", "tone": 8, "tone_label": "Warm", "progress": 4, "progress_label": "Circling"}}
+{"0": {"engagement": 8, "rationale": "...", "tone": 6, "tone_label": "Neutral", "progress": 7, "progress_label": "Advancing", "moment": "You and Maya planning the lake house trip for August, still arguing about the dates"}, "1": {"engagement": 3, "rationale": "...", "tone": 8, "tone_label": "Warm", "progress": 4, "progress_label": "Circling", "moment": "..."}}
 
 Conversations:
 {blocks}"""
@@ -181,6 +183,9 @@ def _parse_batch(text, items):
             "tone_label": str(entry.get("tone_label", "")).strip(),
             "progress": _valid_score(entry.get("progress")),
             "progress_label": str(entry.get("progress_label", "")).strip(),
+            # Semantic memory: optional - a missing/empty moment just means
+            # the caller falls back to the deterministic note.
+            "moment": str(entry.get("moment", "")).strip(),
         }
     return results
 
@@ -191,7 +196,8 @@ def llm_engagement_batch(items):
     ``items`` is [(key, parts)] with ``parts`` as [(speaker, text)].
     Returns {key: {"engagement": float, "rationale": str,
                    "tone": float|None, "tone_label": str,
-                   "progress": float|None, "progress_label": str}}.
+                   "progress": float|None, "progress_label": str,
+                   "moment": str}}.
     Keys with no valid engagement score are omitted, so callers fall back
     to the deterministic score for those conversations.
 
@@ -235,7 +241,8 @@ def llm_engagement(parts):
 
     Returns {"engagement": float|None, "rationale": str,
              "tone": float|None, "tone_label": str,
-             "progress": float|None, "progress_label": str} -
+             "progress": float|None, "progress_label": str,
+             "moment": str} -
     or None when no provider is configured, the transcript is empty, or
     the requests fail. Partial results are kept: a valid engagement score
     is returned even if the tone fields are missing/invalid.

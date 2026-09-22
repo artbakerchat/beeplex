@@ -205,10 +205,17 @@ def _save_moments(moments):
 def _moment_note(parts, bd):
     """One line about what a conversation was about.
 
-    No transcript - just the gist: the phrase it kept circling, or the
-    longest substantive turn's opening, or the quiet itself. This is the
-    raw material of Bee's memory.
+    When the LLM batch ran, its one-sentence semantic memory wins - it
+    knows what the conversation was *about*, which word counting can't.
+    Otherwise the deterministic chain: the phrase it kept circling, the
+    longest turn's opening, or the quiet itself. Never a transcript -
+    just the gist. This is the raw material of Bee's memory.
     """
+    llm_moment = ((bd.get("llm") or {}).get("moment") or "").strip()
+    if llm_moment:
+        if len(llm_moment) > 220:
+            llm_moment = llm_moment[:220].rsplit(" ", 1)[0] + "\u2026"
+        return llm_moment
     from temporal_scoring import top_repeats
     repeats = top_repeats(parts, limit=2)
     if repeats:

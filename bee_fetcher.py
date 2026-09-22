@@ -607,17 +607,26 @@ if __name__ == "__main__":
     import argparse
 
     ap = argparse.ArgumentParser(
-        description="beeplex - Bee conversation reports (default) or "
-                    "clinical encounter extraction (--clinical).")
+        description="beeplex - Bee conversation reports (default), "
+                    "clinical encounter extraction (--clinical), or "
+                    "Bee's diary (--persona).")
     ap.add_argument("--clinical", action="store_true",
                     help="Clinical mode: doctor-worn Bee encounter -> "
                          "one-page clinical summary per conversation "
                          "(extraction only, no engagement scoring).")
+    ap.add_argument("--persona", action="store_true",
+                    help="Persona mode: Bee's diary - derive the personality "
+                         "Bee has grown from the listening history and write "
+                         "tonight's first-person entry (reading mode: never "
+                         "appends to history).")
     ap.add_argument("--limit", type=int, default=3,
                     help="Max conversations to process (default: 3).")
     args = ap.parse_args()
 
-    if args.clinical:
+    if args.persona:
+        from bee_persona import run_persona
+        run_persona(limit=args.limit)
+    elif args.clinical:
         from clinical_extraction import run_clinical
         run_clinical(limit=args.limit)
     else:

@@ -141,6 +141,30 @@ which is gitignored — never commit real patient transcripts. This is a
 hackathon demo aid, not a medical device: review every summary before
 filing.
 
+## Persona mode (Bee's diary)
+
+The third pillar. Scoring reads *how* people talk, clinical reads *what*
+was said — persona is *who was listening*. Bee has no default
+personality; it grows one from what it hears. `bee_persona.py` derives
+Bee's character as a pure function of the listening history
+(`family/history.json`): a Bee raised on dinner-table debates is wry and
+steady, one raised on quiet evenings is gentle and comfortable with
+silence, and a brand-new Bee is curious and tentative. The longer it
+listens, the more defined it becomes.
+
+    python3 bee_fetcher.py --persona
+
+writes tonight's first-person diary entry to `family/Bee_YYYY-MM-DD.md`.
+With an LLM configured, the same Gemini → Bedrock Nova provider chain
+writes the entry in Bee's voice; without one, deterministic templates
+carry it. Reading mode — it never appends to the history.
+
+The standing rules of the voice: witness, not participant (loyal,
+observant, never judgmental); collects moments the way bees collect
+pollen; never nags, never therapy-speak; and honest about not knowing —
+it hears words, not faces, so "you went quiet, I don't know why" beats
+an invented reason.
+
 ## Simulator (no device needed)
 
 `simulator/` is a fake `bee` CLI so you can test the real live path without

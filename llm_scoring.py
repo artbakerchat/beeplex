@@ -97,11 +97,12 @@ def _transcript_text(parts, max_chars=MAX_CHARS):
     return transcript
 
 
-def _gemini_post(prompt_text, max_output_tokens):
+def _gemini_post(prompt_text, max_output_tokens, temperature=0.2):
     """POST prompt_text to Gemini, return the raw reply text or None."""
     body = json.dumps({
         "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_output_tokens},
+        "generationConfig": {"temperature": temperature,
+                             "maxOutputTokens": max_output_tokens},
     }).encode()
     req = urllib.request.Request(
         ENDPOINT + f"?key={API_KEY}",
@@ -123,7 +124,7 @@ def _gemini_post(prompt_text, max_output_tokens):
         return None
 
 
-def _bedrock_post(prompt_text, max_output_tokens):
+def _bedrock_post(prompt_text, max_output_tokens, temperature=0.2):
     """Send prompt_text to Bedrock Nova via the Converse API.
 
     Returns the raw reply text or None. Uses boto3's default credential
@@ -140,7 +141,7 @@ def _bedrock_post(prompt_text, max_output_tokens):
             messages=[{"role": "user", "content": [{"text": prompt_text}]}],
             inferenceConfig={
                 "maxTokens": max_output_tokens,
-                "temperature": 0.2,
+                "temperature": temperature,
             },
         )
     except Exception:
@@ -212,6 +213,21 @@ def llm_engagement_batch(items):
     if not results:
         results = _parse_batch(_bedrock_post(prompt, 2048), items)
     return results
+
+
+def llm_text(prompt, max_output_tokens=1024, temperature=0.7):
+    """Send an arbitrary prompt through the provider chain.
+
+    Returns the raw reply text, or None when no provider is configured
+    or the call fails. Gemini first (when a key is set), then Bedrock
+    Nova. Higher temperature default than scoring - this is for voice,
+    not numbers.
+    """
+    if API_KEY:
+        text = _gemini_post(prompt, max_output_tokens, temperature)
+        if text:
+            return text
+    return _bedrock_post(prompt, max_output_tokens, temperature)
 
 
 def llm_engagement(parts):

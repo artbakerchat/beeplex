@@ -1,0 +1,10 @@
+[theme]
+# Bee theme: honey-amber on warm cream
+primaryColor = "#E8A317"
+backgroundColor = "#FFFDF5"
+secondaryBackgroundColor = "#F5EDD6"
+textColor = "#3A2E1A"
+font = "sans serif"
+
+[server]
+headless = false

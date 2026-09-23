@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+agentcore/.env.local
+*.egg-info/
+dist/

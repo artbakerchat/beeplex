@@ -1,0 +1,1 @@
+{"agents":{"my-agent":{"app_path":"app/my_agent","entrypoint":"main.py"}},"memories":{},"project":"my-agent"}

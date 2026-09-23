@@ -1,0 +1,12 @@
+# my-agent Python dependencies (mirrors app/my_agent/pyproject.toml)
+strands-agents
+bedrock-agentcore
+boto3
+# report generation (family.py in the beeplex checkout)
+pandas
+openpyxl
+python-docx
+python-pptx
+python-dotenv  # optional: lets beeplex auto-load GEMINI_API_KEY from a .env file
+# local web UI
+streamlit

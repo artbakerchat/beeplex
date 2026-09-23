@@ -12,3 +12,7 @@ simulator/recordings/
 
 __pycache__/
 .vscode/
+
+# my-agent subfolder: heavy but regenerable, never commit
+my-agent/.venv/
+my-agent/ui/components/conversation_cards/frontend/node_modules/

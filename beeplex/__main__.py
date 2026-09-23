@@ -34,6 +34,10 @@ def main() -> None:
     args = parser.parse_args()
     if args.demo:
         os.environ["BEEPLEX_DEMO"] = "1"
+        # Demo is a fake CLI on the same subprocess path as the real one, not
+        # a code branch. Forcing BEE_CLI keeps the demo honest even if the
+        # caller (e.g. a test harness) set BEE_CLI to something else.
+        os.environ["BEE_CLI"] = str(Path(__file__).with_name("demo_cli.py"))
     if args.data_dir:
         os.environ["BEEPLEX_DATA_DIR"] = args.data_dir
 

@@ -551,24 +551,12 @@ def run_persona(limit=3):
     persona = derive_persona(history, _load_moments())
 
     today = []
-    if bf.MOCK_FORCED:
-        from .bee_sources import _mock_conversations
-
-        conversations = _mock_conversations()[:limit]
-    else:
-        conversations = bf.list_conversations(limit=limit)
+    conversations = bf.list_conversations(limit=limit)
     if conversations:
         prepared = []
         for conv in conversations:
             conv_id = bf._conv_id(conv)
-            if bf.MOCK_FORCED:
-                source, parts, events = (
-                    conv,
-                    bf._utterance_parts(conv),
-                    bf._utterance_events(conv),
-                )
-            else:
-                source, parts, events = bf._resolve_source(conv)
+            source, parts, events = bf._resolve_source(conv)
             prepared.append((conv_id, source, parts, events))
         llm_map = llm_engagement_batch(
             [(str(i), parts) for i, (_, _, parts, _) in enumerate(prepared)]

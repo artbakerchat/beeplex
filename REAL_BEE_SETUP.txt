@@ -45,7 +45,6 @@ The result should contain:
 If it says demo, clear demo variables in the current PowerShell window:
 
   Remove-Item Env:BEEPLEX_DEMO -ErrorAction SilentlyContinue
-  Remove-Item Env:BEEX_MOCK -ErrorAction SilentlyContinue
   .\.venv\Scripts\python.exe -m beeplex --check
 
 

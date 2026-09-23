@@ -90,7 +90,7 @@ that support MCP prompts. The `beeplex://guide` resource explains tool selection
 | --- | --- |
 | `BEE_CLI` | `bee`; executable path if it is not on your chat app's PATH |
 | `BEEPLEX_DATA_DIR` | `~/.beeplex`; reports, dashboard, diary and profile |
-| `BEEPLEX_DEMO=1` | Same as `--demo`; legacy `BEEX_MOCK=1` also works |
+| `BEEPLEX_DEMO=1` | Same as `--demo`: routes the CLI calls to the bundled demo CLI (`beeplex/demo_cli.py`), so the exact same code path serves clearly-labelled sample data — there is no separate mock branch |
 | `BEEPLEX_LLM=1` | Opt in to extra provider calls for scoring and writing |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | Optional Gemini enrichment settings |
 | `BEDROCK_REGION`, `BEDROCK_MODEL` | Optional Bedrock enrichment settings |

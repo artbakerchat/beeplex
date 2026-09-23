@@ -5,18 +5,33 @@ from openpyxl import load_workbook
 from pptx import Presentation
 
 from beeplex import bee_fetcher, llm_scoring, reports
+from beeplex.demo_cli import _conversations
+
+
+def fixture_rows():
+    """Deterministic rows scored from the bundled demo conversations."""
+    return [
+        bee_fetcher._row_from_source(
+            conv,
+            bee_fetcher._utterance_parts(conv),
+            bee_fetcher._utterance_events(conv),
+            llm=None,
+            conv_id=conv["id"],
+        )
+        for conv in _conversations()[:2]
+    ]
 
 
 def test_exports_contain_requested_rows_and_preserve_formula_like_text(
     tmp_path, monkeypatch
 ):
-    rows = bee_fetcher.mock_rows()[:2]
+    rows = fixture_rows()
     rows[0]["Session_Title"] = '=HYPERLINK("https://example.invalid", "untrusted")'
     requested = []
 
     def fetch(limit, *, persist):
         requested.append((limit, persist))
-        return rows[:limit], {"mode": "mock", "detail": "test fixture"}
+        return rows[:limit], {"mode": "demo", "detail": "test fixture"}
 
     monkeypatch.setattr(bee_fetcher, "fetch_report_data", fetch)
     monkeypatch.setattr(reports, "DATA_DIR", tmp_path)

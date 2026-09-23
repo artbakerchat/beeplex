@@ -1,13 +1,24 @@
-"""Small MCP surface for natural conversation about Bee memories."""
+"""MCP server for beeplex: conversation tools over the Bee CLI.
 
+The tool implementations live here directly -- there is no separate
+"shared tools" layer. Every data call goes through ``beeplex.client.run``,
+the single subprocess path; in demo mode that subprocess is the bundled
+fake CLI (``beeplex/demo_cli.py``), so sample data flows through the exact
+same code as live data.
+"""
+
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
+from threading import RLock
 from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from . import __version__, tools
-from .client import status
+from . import __version__, bee_fetcher as bf, bee_sources as sources
+from .client import BeeError, run, status
+from .config import DATA_DIR, DEMO
 
 Limit = Annotated[
     int, Field(ge=1, le=50, description="Maximum items to return (1–50).")
@@ -30,6 +41,10 @@ WRITE = ToolAnnotations(
     open_world_hint=True,
 )
 
+# Serializes local file writes (reports, diary, profile refresh) so two
+# concurrent tool calls cannot interleave them.
+WRITE_LOCK = RLock()
+
 INSTRUCTIONS = """You help the user remember and reflect on their life using Bee.
 Answer in natural, concise language; the user should not need to know tool names.
 Start questions about recent events with get_context. Search older topics using
@@ -46,6 +61,28 @@ Scores are heuristic observations, not psychological or medical assessments.
 """
 
 server = MCPServer("beeplex", version=__version__, instructions=INSTRUCTIONS)
+
+
+def result(data, **metadata) -> dict:
+    return {"mode": "demo" if DEMO else "live", "data": data, **metadata}
+
+
+def _items(payload, key):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        return payload.get(key, payload.get("items", [])) or []
+    raise BeeError("Bee returned an unexpected response shape.")
+
+
+def _summary(conv):
+    return {
+        "id": str(bf._conv_id(conv)) if bf._conv_id(conv) is not None else None,
+        "title": conv.get("title", conv.get("name", "Untitled")),
+        "summary": conv.get("summary", conv.get("description", "")),
+        "start_time": conv.get("start_time"),
+        "state": conv.get("state"),
+    }
 
 
 @server.tool(annotations=READ)
@@ -66,7 +103,28 @@ def get_context(
     summaries and IDs; use read_conversation for the transcript. For a historical
     day, use period='date' and date_str. limit applies to recent conversations.
     """
-    return tools.get_context(period, date_str, limit)
+    if period == "date":
+        if not date_str:
+            raise BeeError("Provide date_str as YYYY-MM-DD when period is date.")
+        try:
+            date.fromisoformat(date_str)
+        except ValueError:
+            raise BeeError(
+                "date_str must be a valid calendar date in YYYY-MM-DD format."
+            ) from None
+        data = sources.daily_find(date_str)
+    elif period == "today":
+        data = sources.today(context=True)
+    else:
+        data = sources.now()
+        conversations = _items(data, "conversations")
+        return result(
+            [_summary(c) for c in conversations[:limit]],
+            window="last 10 hours",
+            has_more=len(conversations) > limit,
+            hint="Use read_conversation with an id for exact words; fetch_conversations to browse further.",
+        )
+    return result(data, message="No summary found." if not data else None)
 
 
 @server.tool(annotations=READ)
@@ -84,7 +142,46 @@ def search_memories(
     for meaning-based conversation search when exact keywords do not match.
     Use returned conversation IDs with read_conversation for more detail.
     """
-    return tools.search_memories(query, limit, since, until, semantic)
+    query = query.strip()
+    if not query:
+        raise BeeError("Provide a topic, name, or phrase to search for.")
+    for value in (since, until):
+        if value:
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                raise BeeError("Search dates must be valid YYYY-MM-DD dates.") from None
+    if since and until and since > until:
+        raise BeeError("since must be on or before until.")
+    # Bee's search API expects epoch milliseconds. Calendar days use the
+    # server's local timezone, with until including the whole last day.
+    try:
+        since_ms = (
+            int(
+                datetime.combine(date.fromisoformat(since), time.min).timestamp() * 1000
+            )
+            if since
+            else None
+        )
+        until_ms = (
+            int(
+                datetime.combine(
+                    date.fromisoformat(until) + timedelta(days=1), time.min
+                ).timestamp()
+                * 1000
+            )
+            - 1
+            if until
+            else None
+        )
+    except (OverflowError, OSError, ValueError):
+        raise BeeError(
+            "Search date is outside the supported timestamp range."
+        ) from None
+    payload = sources.search(
+        query, neural=semantic, since=since_ms, until=until_ms, limit=limit
+    )
+    return result(payload, date_timezone=str(datetime.now().astimezone().tzinfo))
 
 
 @server.tool(annotations=READ)
@@ -93,7 +190,13 @@ def fetch_conversations(limit: Limit = 5, cursor: Cursor = None) -> dict[str, An
 
     For 'show me more', pass next_cursor from the previous response.
     """
-    return tools.fetch_conversations(limit, cursor)
+    args = ["conversations", "list", "--limit", str(limit)]
+    if cursor:
+        args += ["--cursor", cursor]
+    payload = run(*args)
+    conversations = _items(payload, "conversations")[:limit]
+    next_cursor = payload.get("next_cursor") if isinstance(payload, dict) else None
+    return result([_summary(c) for c in conversations], next_cursor=next_cursor)
 
 
 @server.tool(annotations=READ)
@@ -107,13 +210,27 @@ def read_conversation(
     Use an ID from search or browsing. Continue with next_offset when present.
     Return only relevant excerpts in the final answer.
     """
-    return tools.read_conversation(conversation_id, offset, limit)
+    conv = bf.get_conversation(conversation_id)
+    if not conv:
+        raise BeeError(
+            "Conversation not found. Use an id returned by fetch_conversations or search_memories."
+        )
+    utterances = conv.get("utterances")
+    if not isinstance(utterances, list):
+        transcript = sources.conversation_transcript(conversation_id)
+        utterances = _items(transcript, "utterances")
+    end = offset + limit
+    return result(
+        {**_summary(conv), "utterances": utterances[offset:end]},
+        next_offset=end if end < len(utterances) else None,
+        total_utterances=len(utterances),
+    )
 
 
 @server.tool(annotations=READ)
 def get_todos(limit: Limit = 20, cursor: Cursor = None) -> dict[str, Any]:
     """Read the user's commitments and action items. Does not modify Bee tasks."""
-    return tools.get_todos(limit, cursor)
+    return result(sources.todos_list(limit=limit, cursor=cursor))
 
 
 @server.tool(annotations=READ)
@@ -123,7 +240,21 @@ def score_conversations(limit: Limit = 5) -> dict[str, Any]:
     Does not write reports or history. Uses deterministic signals unless the
     user enabled provider enrichment. Ratings are heuristics, not diagnoses.
     """
-    return tools.score_conversations(limit)
+    rows, info = bf.fetch_report_data(limit=limit, persist=False)
+    return result(
+        [
+            {
+                "title": row["Session_Title"],
+                "date": str(row.get("Recording_Date") or ""),
+                "engagement": row["Engagement_Level"],
+                "forward_motion": row["Forward_Motion"],
+                "tone": row["Tone_Rating"],
+            }
+            for row in rows
+        ],
+        detail=info["detail"],
+        interpretation="Heuristic observations about conversation structure, not objective judgments about people.",
+    )
 
 
 @server.tool(annotations=WRITE)
@@ -134,7 +265,10 @@ def generate_report(limit: Limit = 10) -> dict[str, Any]:
     score history, and replaces reports for the same recording date. Returns all
     generated file paths, including replacements. Requires the reports extra.
     """
-    return tools.generate_report(limit)
+    from .reports import generate
+
+    with WRITE_LOCK:
+        return generate(limit=limit)
 
 
 @server.tool(annotations=WRITE)
@@ -144,7 +278,12 @@ def bee_diary(limit: Limit = 3) -> dict[str, Any]:
     Uses listening history and up to limit recent conversations. Saves a local
     Markdown file, replacing today's entry if it exists. Use only when requested.
     """
-    return tools.bee_diary(limit)
+    from .bee_persona import run_persona
+
+    run("me", timeout=10)
+    with WRITE_LOCK:
+        path = Path(run_persona(limit=limit))
+        return result(path.read_text(encoding="utf-8"), file=str(path))
 
 
 @server.tool(
@@ -161,7 +300,26 @@ def user_profile(
     it; full=true with refresh=true rebuilds the derived profile from scratch.
     limit bounds the conversations in a full rebuild. Bee itself is not changed.
     """
-    return tools.user_profile(refresh, full, limit)
+    from .profile import run_profile
+
+    if full and not refresh:
+        raise BeeError(
+            "A full rebuild requires refresh=true. Otherwise the saved profile is read without changes."
+        )
+    path = DATA_DIR / "user.md"
+    with WRITE_LOCK:
+        if refresh:
+            run("me", timeout=10)
+            filename, info = run_profile(full=full, limit=limit)
+            path = Path(filename)
+        else:
+            info = {}
+        if not path.is_file():
+            return result(
+                None,
+                message="No saved profile yet. Call user_profile with refresh=true to build it.",
+            )
+        return result(path.read_text(encoding="utf-8"), file=str(path), update=info)
 
 
 @server.resource("beeplex://guide")

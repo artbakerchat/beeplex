@@ -375,7 +375,7 @@ def record_run(entries, info):
     """Record one run: append to history (live only) and rebuild the page.
 
     ``entries`` is [{id, title, date, parts, breakdown}]; ``info`` is
-    {"mode": "live"|"mock"}. Mock runs regenerate the dashboard from
+    {"mode": "live"|"demo"}. Demo runs regenerate the dashboard from
     history with a demo banner and never append.
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -391,7 +391,7 @@ def record_run(entries, info):
         history["runs"] = history["runs"][-MAX_RUNS:]
         _save_history(history)
         # Bee's memory: one line per conversation about what it was
-        # about. Live runs only; mock/demo runs never record.
+        # about. Live runs only; demo runs never record.
         from .bee_persona import record_moments
 
         record_moments(entries, now.isoformat())
@@ -475,7 +475,7 @@ function sparkSvg(s){if(!s||s.length<2)return '<span class="meta">not enough his
 function barColor(good){return good>=0.7?"var(--good)":(good>=0.4?"var(--warn)":"var(--bad)");}
 function render(){
  document.getElementById("runmeta").textContent=META.ts+" \u00b7 "+META.n+" conversations \u00b7 "+META.mode;
- if(META.mode=="mock")document.getElementById("mockbanner").innerHTML='<div class="banner">Demo data \u2014 the Bee CLI isn\u2019t connected, so there\u2019s nothing new to score. Trends below come from your saved history.</div>';
+ if(META.mode=="demo")document.getElementById("mockbanner").innerHTML='<div class="banner">Demo data \u2014 the Bee CLI isn\u2019t connected, so there\u2019s nothing new to score. Trends below come from your saved history.</div>';
  var rows=CARDS.map(function(c){return{c:c,e:blendEng(c),f:blendFm(c)};});
  rows.sort(function(a,b){return(b.e==null?-1:b.e)-(a.e==null?-1:a.e);});
  var rh="";

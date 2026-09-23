@@ -23,7 +23,6 @@ async def connect(tmp_path, *, demo=False, protocol="auto", **env):
             "BEE_CLI": str(ROOT / "simulator" / "bee"),
             "BEEPLEX_DATA_DIR": str(tmp_path / "output"),
             "BEEPLEX_DEMO": "0",
-            "BEEX_MOCK": "0",
             "BEEPLEX_LLM": "0",
             "SIM_BEE_EMPTY": "0",
             "SIM_BEE_FAIL_AUTH": "0",

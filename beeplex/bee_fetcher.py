@@ -3,13 +3,16 @@
 Fetches real conversation data from the Bee wearable via the official Bee CLI
 (``npm install -g @beeai/cli``) and maps it onto the Office report schema.
 
-Two modes:
+Two modes, one code path:
 
 * ``live`` - the ``bee`` binary is on PATH and authenticated
   (``bee me --json`` succeeds). Real transcripts are fetched.
-* ``mock`` - explicitly enabled with ``BEEPLEX_DEMO=1`` (or ``BEEX_MOCK=1``).
-  Sample conversations are shared with the MCP browsing tools. Live failures
-  raise actionable errors; they never switch to demo data.
+* ``demo`` - explicitly enabled with ``BEEPLEX_DEMO=1``. ``BEE_CLI`` is
+  forced to the bundled fake CLI (``beeplex/demo_cli.py``), which serves
+  clearly-labelled sample conversations through the exact same subprocess
+  path as live mode. There is no separate mock branch: the demo exercises
+  the real data handling. Live failures raise actionable errors; they
+  never switch to demo data.
 
 Privacy: Bee data is end-to-end encrypted and belongs to the owner. This
 module only ever reads it through the owner's own authenticated CLI and never
@@ -26,9 +29,12 @@ from .temporal_scoring import effective_words, temporal_scores
 from .client import BeeError, command, run
 from .config import DEMO
 
+# Compatibility shims for clinical_extraction.py (which this refactor does
+# not touch): it imports BEE_CMD, MOCK_FORCED, cli_available,
+# is_authenticated, list_conversations, _conv_id, _recording_date and
+# _resolve_source from this module.
 BEE_CMD = os.environ.get("BEE_CLI", "bee")
 MOCK_FORCED = DEMO
-DEFAULT_TIMEOUT = 60
 
 # Sentinel for "LLM result not pre-fetched": _engagement_cells falls back to a
 # single-shot llm_engagement() call (used by simulator/record.py, which scores
@@ -52,7 +58,7 @@ SCHEMA = [
 
 
 def cli_available():
-    """True when the `bee` binary is on PATH."""
+    """True when the configured CLI binary is on PATH."""
     try:
         command()
         return True
@@ -60,15 +66,10 @@ def cli_available():
         return False
 
 
-def _run_bee(*args, timeout=DEFAULT_TIMEOUT):
-    """Run a read command; failures are explicit and never fabricated data."""
-    return run(*args, timeout=timeout)
-
-
 def is_authenticated():
     """True when the CLI has a working Bee login."""
     try:
-        _run_bee("me", timeout=10)
+        run("me", timeout=10)
         return True
     except BeeError:
         return False
@@ -76,7 +77,7 @@ def is_authenticated():
 
 def list_conversations(limit=10):
     """Return normalized conversation dicts (summaries only), newest first."""
-    payload = _run_bee("conversations", "list", "--limit", str(limit))
+    payload = run("conversations", "list", "--limit", str(limit))
     if isinstance(payload, dict):
         items = payload.get("conversations") or payload.get("items") or []
     elif isinstance(payload, list):
@@ -88,7 +89,7 @@ def list_conversations(limit=10):
 
 def get_conversation(conv_id):
     """Return one full conversation (verbatim utterances) or None."""
-    payload = _run_bee("conversations", "get", str(conv_id))
+    payload = run("conversations", "get", str(conv_id))
     if isinstance(payload, dict):
         conv = payload.get("conversation", payload)
         return conv if isinstance(conv, dict) else None
@@ -527,51 +528,20 @@ def conversation_to_row(conv, llm=_LLM_NOT_FETCHED):
     return _row_from_source(source, parts, events, llm, conv_id)
 
 
-def mock_rows():
-    """Score the same sample conversations used by browsing and search."""
-    from .bee_sources import _mock_conversations
-
-    return [
-        _row_from_source(
-            conv,
-            _utterance_parts(conv),
-            _utterance_events(conv),
-            llm=None,
-            conv_id=conv["id"],
-        )
-        for conv in _mock_conversations()
-    ]
-
-
 def fetch_report_data(limit=10, *, persist=True):
     """Fetch conversation rows for the reports.
 
     Returns (rows, info) where info describes the source:
-    {"mode": "live"|"mock", "detail": ...}.
+    {"mode": "live"|"demo", "detail": ...}. One code path: in demo mode the
+    subprocess is the bundled fake CLI serving sample data.
     """
-    if MOCK_FORCED:
-        rows, info = (
-            mock_rows()[:limit],
-            {
-                "mode": "mock",
-                "detail": "Explicit demo mode - sample data only",
-            },
-        )
-    elif not cli_available():
+    if not cli_available():
         raise BeeError(
             "Bee CLI not found. Install with npm install -g @beeai/cli, then run bee login."
         )
-    elif not is_authenticated():
+    if not is_authenticated():
         raise BeeError("Bee CLI not authenticated. Run bee login, then try again.")
-    else:
-        rows, info = _fetch_live(limit, persist=persist)
-    # Mock runs regenerate the dashboard from history (demo banner, no
-    # new history entry); the live path records the run itself.
-    if info["mode"] == "mock" and persist:
-        from .dashboard import record_run
-
-        record_run([], info)
-    return rows, info
+    return _fetch_impl(limit, persist=persist)
 
 
 def _scoring_context():
@@ -642,8 +612,12 @@ def _enrich_rows(rows, pairs):
             ) + f"Day summary (Bee): {summary}"
 
 
-def _fetch_live(limit, *, persist=True):
-    """Live path of fetch_report_data: CLI list/get, batch LLM, dashboard."""
+def _fetch_impl(limit, *, persist=True):
+    """The single fetch path of fetch_report_data: CLI list/get, batch LLM,
+    second-reader enrichment, dashboard. In demo mode the CLI binary is the
+    bundled fake serving sample data, so no separate branch is needed."""
+
+    mode = "demo" if DEMO else "live"
 
     conversations = list_conversations(limit=limit)
 
@@ -679,7 +653,8 @@ def _fetch_live(limit, *, persist=True):
 
     # Coaching dashboard: append this run's scores to the local trend
     # history and regenerate BEEPLEX_DATA_DIR/dashboard.html. Automatic on every
-    # run; mock mode regenerates the page from history without appending.
+    # run; record_run appends only for live mode, so demo runs regenerate the
+    # page from history (demo banner) without touching history.
     from .dashboard import record_run
 
     if persist:
@@ -698,11 +673,12 @@ def _fetch_live(limit, *, persist=True):
                 }
                 for row, (conv_id, source, parts, events, llm) in pairs
             ],
-            {"mode": "live"},
+            {"mode": mode},
         )
     return rows, {
-        "mode": "live",
-        "detail": f"{len(rows)} conversations via Bee CLI",
+        "mode": mode,
+        "detail": f"{len(rows)} conversations via Bee CLI"
+        + (" (sample data)" if mode == "demo" else ""),
     }
 
 

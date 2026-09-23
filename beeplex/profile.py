@@ -35,7 +35,7 @@ import re
 import time
 from datetime import datetime, timezone
 
-from .config import DATA_DIR
+from .config import DATA_DIR, DEMO
 
 FAMILY = str(DATA_DIR)
 PROFILE_MD = os.path.join(FAMILY, "user.md")
@@ -96,9 +96,9 @@ def _save_state(state):
 
 
 def _is_live():
-    from . import bee_sources
+    from .bee_fetcher import cli_available, is_authenticated
 
-    return bee_sources._live()
+    return cli_available() and is_authenticated()
 
 
 def _summaries_to_targets(summaries, processed):
@@ -141,21 +141,15 @@ def _gather_targets(limit, full, state, live):
             except Exception:
                 new_cursor = None
     else:
-        # Mock mode: the scripted mock conversations stand in for the feed.
-        from . import bee_sources
+        # No CLI configured: failures are explicit, never silent sample data.
+        # Run with beeplex --demo (or BEE_CLI pointed at demo_cli.py) for the
+        # sample-data path, which flows through this same live code.
+        from .client import BeeError
 
-        mocks = bee_sources._mock_conversations()[:limit]
-        return (
-            [
-                (
-                    c["id"],
-                    {k: c[k] for k in ("id", "title", "summary", "start_time")},
-                    [(u.get("speaker"), u["text"]) for u in c["utterances"]],
-                )
-                for c in mocks
-                if c["id"] not in processed
-            ],
-            "mock-cursor-1",
+        raise BeeError(
+            "Bee CLI not found or not authenticated. Install with "
+            "npm install -g @beeai/cli and run bee login, or use "
+            "beeplex --demo for sample data."
         )
 
     resolved = []
@@ -171,7 +165,7 @@ def _gather_targets(limit, full, state, live):
     return resolved, new_cursor
 
 
-def _gather_static(live):
+def _gather_static():
     """Facts, insights, journals, places - re-fetched every run."""
     from . import bee_sources
 
@@ -525,14 +519,14 @@ def run_profile(full=False, limit=50):
         state["changed_cursor"] = new_cursor
     state["runs"] += 1
 
-    static = _gather_static(live)
+    static = _gather_static()
     os.makedirs(FAMILY, exist_ok=True)
     with open(PROFILE_MD, "w", encoding="utf-8") as fh:
         fh.write(_render(state, static))
     _save_state(state)
 
     return PROFILE_MD, {
-        "mode": "live" if live else "mock",
+        "mode": "demo" if DEMO else "live",
         "new_conversations": len(targets),
         "total_conversations": len(state["conversations"]),
         "facts": len(static["facts"]),

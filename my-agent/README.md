@@ -13,6 +13,8 @@ The agent's tools drive beeplex directly:
 - `score_conversations(limit)` — engagement, forward-motion, and tone per conversation
 - `generate_report(limit)` — Word/Excel/PowerPoint reports into beeplex's `family/`
   plus a refreshed coaching dashboard
+- `bee_diary(limit)` — Bee's diary entry for today, in Bee's own first-person voice
+  (persona mode: who Bee has become from your history)
 
 (Clinical summaries are deliberately not wired up.)
 
@@ -89,6 +91,10 @@ In `agentcore dev`, plain sentences route to the right tool:
 **Report** (build the .docx/.xlsx/.pptx):
 - "Generate my report."
 - "Build the weekly reports and refresh the dashboard."
+
+**Diary** (Bee's persona, first-person):
+- "What did Bee write about today?"
+- "Read me Bee's diary entry."
 
 Follow-ups work too ("tell me more about the second one"). Until `bee login`
 is done, answers come from clearly-labelled mock data, and the agent says so.

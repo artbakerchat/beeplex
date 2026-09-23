@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "ui"))
 from my_agent.main import (  # noqa: E402
     BEEPLEX_DIR,
     _beeplex,
+    bee_diary,
     fetch_conversations,
     generate_report,
     score_conversations,
@@ -76,8 +77,8 @@ with st.sidebar:
     st.divider()
     st.caption("Model: ca.amazon.nova-micro-v1:0 (ca-central-1)")
 
-tab_fetch, tab_score, tab_report, tab_pick = st.tabs(
-    ["Conversations", "Scores", "Report", "Picker"]
+tab_fetch, tab_score, tab_report, tab_diary, tab_pick = st.tabs(
+    ["Conversations", "Scores", "Report", "Diary", "Picker"]
 )
 
 with tab_fetch:
@@ -98,6 +99,13 @@ with tab_report:
     if st.button("Generate report", key="report"):
         with st.spinner("Generating... (this can take a minute)"):
             st.text(generate_report(limit=10))
+
+with tab_diary:
+    st.subheader("Bee's diary")
+    st.caption("Persona mode: who Bee has become, in its own first-person voice.")
+    if st.button("Read today's entry", key="diary"):
+        with st.spinner("Bee is writing..."):
+            st.markdown(bee_diary(limit=limit))
 
 with tab_pick:
     st.subheader("Pick a conversation")

@@ -1,0 +1,122 @@
+diff --git a/my-agent/README.md b/my-agent/README.md
+index 11e7b74..4c61086 100644
+--- a/my-agent/README.md
++++ b/my-agent/README.md
+@@ -13,6 +13,8 @@ The agent's tools drive beeplex directly:
+ - `score_conversations(limit)` — engagement, forward-motion, and tone per conversation
+ - `generate_report(limit)` — Word/Excel/PowerPoint reports into beeplex's `family/`
+   plus a refreshed coaching dashboard
++- `bee_diary(limit)` — Bee's diary entry for today, in Bee's own first-person voice
++  (persona mode: who Bee has become from your history)
+ 
+ (Clinical summaries are deliberately not wired up.)
+ 
+@@ -90,6 +92,10 @@ In `agentcore dev`, plain sentences route to the right tool:
+ - "Generate my report."
+ - "Build the weekly reports and refresh the dashboard."
+ 
++**Diary** (Bee's persona, first-person):
++- "What did Bee write about today?"
++- "Read me Bee's diary entry."
++
+ Follow-ups work too ("tell me more about the second one"). Until `bee login`
+ is done, answers come from clearly-labelled mock data, and the agent says so.
+ 
+diff --git a/my-agent/app/my_agent/main.py b/my-agent/app/my_agent/main.py
+index 46fa98a..a9dd2d2 100644
+--- a/my-agent/app/my_agent/main.py
++++ b/my-agent/app/my_agent/main.py
+@@ -2,7 +2,8 @@
+ 
+ Instead of the 00-getting-started sample's customer-support tools, this agent's
+ tools drive the user's Bee hackathon project (beeplex): fetching today's Bee
+-conversations, scoring them, and generating the Word/Excel/PowerPoint reports.
++conversations, scoring them, generating the Word/Excel/PowerPoint reports,
++and reading Bee's diary (the persona mode).
+ 
+ Wrapped in BedrockAgentCoreApp so it runs both locally (agentcore dev) and on
+ AgentCore Runtime (agentcore deploy). The model is loaded from model/load.py,
+@@ -139,6 +140,38 @@ def generate_report(limit: int = 10) -> str:
+     return "\n".join(str(line) for line in lines)
+ 
+ 
++@tool
++def bee_diary(limit: int = 3) -> str:
++    """Read Bee's diary entry for today.
++
++    Runs beeplex's persona mode: derives who Bee has become from your history
++    (maturity, temperament, what it notices, what it remembers) and writes
++    tonight's first-person diary entry to family/Bee_YYYY-MM-DD.md.
++
++    Args:
++        limit: Max conversations from today to reflect on (default 3)
++
++    Returns:
++        Bee's diary entry for today, in Bee's own voice.
++    """
++    _beeplex()  # validates BEEPLEX_DIR exists
++    from datetime import date
++
++    proc = subprocess.run(
++        [sys.executable, "bee_fetcher.py", "--persona", "--limit", str(limit)],
++        cwd=BEEPLEX_DIR,
++        capture_output=True,
++        text=True,
++        timeout=600,
++    )
++    if proc.returncode != 0:
++        return f"Diary generation failed:\n{proc.stderr[-2000:]}"
++    path = BEEPLEX_DIR / "family" / f"Bee_{date.today().isoformat()}.md"
++    if not path.is_file():
++        return "Diary ran but no entry file was written."
++    return path.read_text()
++
++
+ # --- Agent Setup ---
+ 
+ SYSTEM_PROMPT = """You are a copilot for the user's Bee hackathon project (beeplex).
+@@ -152,6 +185,7 @@ You have access to:
+ 1. fetch_conversations(limit) - list recent Bee conversations with dates and topics
+ 2. score_conversations(limit) - engagement, forward-motion, and tone ratings per conversation
+ 3. generate_report(limit) - build the .docx/.xlsx/.pptx reports and refresh the dashboard
++4. bee_diary(limit) - read Bee's diary entry for today, in Bee's own first-person voice
+ 
+ Rules:
+ - Always use the tools rather than guessing about the user's conversations.
+diff --git a/my-agent/ui/app.py b/my-agent/ui/app.py
+index a35fc2e..a3fe6fc 100644
+--- a/my-agent/ui/app.py
++++ b/my-agent/ui/app.py
+@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT / "ui"))
+ from my_agent.main import (  # noqa: E402
+     BEEPLEX_DIR,
+     _beeplex,
++    bee_diary,
+     fetch_conversations,
+     generate_report,
+     score_conversations,
+@@ -76,8 +77,8 @@ with st.sidebar:
+     st.divider()
+     st.caption("Model: ca.amazon.nova-micro-v1:0 (ca-central-1)")
+ 
+-tab_fetch, tab_score, tab_report, tab_pick = st.tabs(
+-    ["Conversations", "Scores", "Report", "Picker"]
++tab_fetch, tab_score, tab_report, tab_diary, tab_pick = st.tabs(
++    ["Conversations", "Scores", "Report", "Diary", "Picker"]
+ )
+ 
+ with tab_fetch:
+@@ -99,6 +100,13 @@ with tab_report:
+         with st.spinner("Generating... (this can take a minute)"):
+             st.text(generate_report(limit=10))
+ 
++with tab_diary:
++    st.subheader("Bee's diary")
++    st.caption("Persona mode: who Bee has become, in its own first-person voice.")
++    if st.button("Read today's entry", key="diary"):
++        with st.spinner("Bee is writing..."):
++            st.markdown(bee_diary(limit=limit))
++
+ with tab_pick:
+     st.subheader("Pick a conversation")
+     st.caption(

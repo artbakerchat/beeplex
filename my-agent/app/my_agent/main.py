@@ -2,7 +2,8 @@
 
 Instead of the 00-getting-started sample's customer-support tools, this agent's
 tools drive the user's Bee hackathon project (beeplex): fetching today's Bee
-conversations, scoring them, and generating the Word/Excel/PowerPoint reports.
+conversations, scoring them, generating the Word/Excel/PowerPoint reports,
+and reading Bee's diary (the persona mode).
 
 Wrapped in BedrockAgentCoreApp so it runs both locally (agentcore dev) and on
 AgentCore Runtime (agentcore deploy). The model is loaded from model/load.py,
@@ -139,6 +140,38 @@ def generate_report(limit: int = 10) -> str:
     return "\n".join(str(line) for line in lines)
 
 
+@tool
+def bee_diary(limit: int = 3) -> str:
+    """Read Bee's diary entry for today.
+
+    Runs beeplex's persona mode: derives who Bee has become from your history
+    (maturity, temperament, what it notices, what it remembers) and writes
+    tonight's first-person diary entry to family/Bee_YYYY-MM-DD.md.
+
+    Args:
+        limit: Max conversations from today to reflect on (default 3)
+
+    Returns:
+        Bee's diary entry for today, in Bee's own voice.
+    """
+    _beeplex()  # validates BEEPLEX_DIR exists
+    from datetime import date
+
+    proc = subprocess.run(
+        [sys.executable, "bee_fetcher.py", "--persona", "--limit", str(limit)],
+        cwd=BEEPLEX_DIR,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if proc.returncode != 0:
+        return f"Diary generation failed:\n{proc.stderr[-2000:]}"
+    path = BEEPLEX_DIR / "family" / f"Bee_{date.today().isoformat()}.md"
+    if not path.is_file():
+        return "Diary ran but no entry file was written."
+    return path.read_text()
+
+
 # --- Agent Setup ---
 
 SYSTEM_PROMPT = """You are a copilot for the user's Bee hackathon project (beeplex).
@@ -152,6 +185,7 @@ You have access to:
 1. fetch_conversations(limit) - list recent Bee conversations with dates and topics
 2. score_conversations(limit) - engagement, forward-motion, and tone ratings per conversation
 3. generate_report(limit) - build the .docx/.xlsx/.pptx reports and refresh the dashboard
+4. bee_diary(limit) - read Bee's diary entry for today, in Bee's own first-person voice
 
 Rules:
 - Always use the tools rather than guessing about the user's conversations.

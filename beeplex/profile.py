@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Beeplex user profile builder: maintain family/user.md.
+"""Beeplex user profile builder: maintain BEEPLEX_DATA_DIR/user.md.
 
 Incrementally learns who the owner is from their Bee data and keeps a
 living profile (the skill's user.md workflow, adapted to beeplex):
@@ -11,11 +11,11 @@ living profile (the skill's user.md workflow, adapted to beeplex):
 * Bee's insights -> Interests & Hobbies (attributed: "Bee noticed")
 * frequent places -> Places
 
-State lives in family/profile_state.json: per-conversation aggregates,
+State lives in BEEPLEX_DATA_DIR/profile_state.json: per-conversation aggregates,
 processed ids, and the `changed` cursor. Each run gathers only what's
 new, then re-renders the whole user.md from state + fresh static data
 (facts/insights/journals/places are small and idempotent, so they're
-re-fetched every run). Both files stay local - family/ is gitignored -
+re-fetched every run). Both files stay local - BEEPLEX_DATA_DIR/ is gitignored -
 because a user profile is personal data, never committed.
 
 Extraction is deterministic and always runs. When an LLM provider is
@@ -24,9 +24,9 @@ candidate profile updates as JSON, merged defensively; without a key
 the profile is built from structure alone.
 
 Usage:
-    python3 profile.py            # incremental update
-    python3 profile.py --full     # rebuild from scratch
-    python3 profile.py --limit 50 # conversations considered on --full
+    python -m beeplex.profile            # incremental update
+    python -m beeplex.profile --full     # rebuild from scratch
+    python -m beeplex.profile --limit 50 # conversations considered on --full
 """
 
 import json
@@ -35,8 +35,9 @@ import re
 import time
 from datetime import datetime, timezone
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-FAMILY = os.path.join(HERE, "family")
+from .config import DATA_DIR
+
+FAMILY = str(DATA_DIR)
 PROFILE_MD = os.path.join(FAMILY, "user.md")
 STATE_JSON = os.path.join(FAMILY, "profile_state.json")
 
@@ -75,8 +76,9 @@ def _load_state():
     state.setdefault("processed_ids", [])
     state.setdefault("conversations", {})
     state.setdefault("changed_cursor", None)
-    state.setdefault("llm", {"relationships": {}, "preferences": [],
-                             "events": [], "notes": []})
+    state.setdefault(
+        "llm", {"relationships": {}, "preferences": [], "events": [], "notes": []}
+    )
     state.setdefault("runs", 0)
     return state
 
@@ -94,7 +96,8 @@ def _save_state(state):
 
 
 def _is_live():
-    import bee_sources
+    from . import bee_sources
+
     return bee_sources._live()
 
 
@@ -116,8 +119,9 @@ def _gather_targets(limit, full, state, live):
     `changed` cursor to persist after successful processing (None when
     the full path was used).
     """
-    from bee_fetcher import get_conversation, list_conversations, _utterance_parts
-    import bee_sources
+    from .bee_fetcher import get_conversation, list_conversations, _utterance_parts
+    from . import bee_sources
+
     processed = set(state["processed_ids"])
     new_cursor = None
 
@@ -138,13 +142,21 @@ def _gather_targets(limit, full, state, live):
                 new_cursor = None
     else:
         # Mock mode: the scripted mock conversations stand in for the feed.
-        import bee_sources
+        from . import bee_sources
+
         mocks = bee_sources._mock_conversations()[:limit]
-        return ([(c["id"],
-                  {k: c[k] for k in ("id", "title", "summary", "start_time")},
-                  [(u.get("speaker"), u["text"]) for u in c["utterances"]])
-                 for c in mocks if c["id"] not in processed],
-                "mock-cursor-1")
+        return (
+            [
+                (
+                    c["id"],
+                    {k: c[k] for k in ("id", "title", "summary", "start_time")},
+                    [(u.get("speaker"), u["text"]) for u in c["utterances"]],
+                )
+                for c in mocks
+                if c["id"] not in processed
+            ],
+            "mock-cursor-1",
+        )
 
     resolved = []
     ok = True
@@ -161,15 +173,18 @@ def _gather_targets(limit, full, state, live):
 
 def _gather_static(live):
     """Facts, insights, journals, places - re-fetched every run."""
-    import bee_sources
-    if live:
-        bee_sources.assume_live()
+    from . import bee_sources
+
     facts = (bee_sources.facts_list(limit=50, unconfirmed=True) or {}).get("facts", [])
     insights = (bee_sources.insights_list(limit=20) or {}).get("insights", [])
     journals = (bee_sources.journals_list(limit=20) or {}).get("journals", [])
     places = (bee_sources.locations_clusters(limit=20) or {}).get("clusters", [])
-    return {"facts": facts, "insights": insights,
-            "journals": journals, "places": places}
+    return {
+        "facts": facts,
+        "insights": insights,
+        "journals": journals,
+        "places": places,
+    }
 
 
 # --- extraction ----------------------------------------------------------
@@ -206,8 +221,7 @@ def _extract(cid, summary, utterances):
             if key in seen or len(mentions) >= 5:
                 continue
             seen.add(key)
-            mentions.append({"hint": m.group(0),
-                             "context": _sentence_around(text, m)})
+            mentions.append({"hint": m.group(0), "context": _sentence_around(text, m)})
 
     start = summary.get("start_time")
     date = None
@@ -228,12 +242,37 @@ def _bucket_fact(text):
     t = text.lower()
     if any(k in t for k in ("name is", "lives in", "born", "years old")):
         return "basic"
-    if any(k in t for k in ("prefer", "like", "love", "hate", "dislike",
-                            "allergic", "favourite", "favorite",
-                            "can't stand", "cannot stand")):
+    if any(
+        k in t
+        for k in (
+            "prefer",
+            "like",
+            "love",
+            "hate",
+            "dislike",
+            "allergic",
+            "favourite",
+            "favorite",
+            "can't stand",
+            "cannot stand",
+        )
+    ):
         return "preferences"
-    if any(k in t for k in ("work", "job", "project", "meeting", "client",
-                            "team", "company", "startup", "deadline", "launch")):
+    if any(
+        k in t
+        for k in (
+            "work",
+            "job",
+            "project",
+            "meeting",
+            "client",
+            "team",
+            "company",
+            "startup",
+            "deadline",
+            "launch",
+        )
+    ):
         return "work"
     return "notes"
 
@@ -241,7 +280,7 @@ def _bucket_fact(text):
 def _llm_candidates(targets):
     """Best-effort LLM pass over the new transcripts. {} on any failure."""
     try:
-        from llm_scoring import llm_text, available
+        from .llm_scoring import llm_text, available
     except ImportError:
         return {}
     if not available() or not targets:
@@ -261,8 +300,11 @@ def _llm_candidates(targets):
     if not blocks:
         return {}
     try:
-        raw = llm_text(_PROFILE_PROMPT.replace("{blocks}", "\n\n".join(blocks)),
-                       max_output_tokens=1024, temperature=0.3)
+        raw = llm_text(
+            _PROFILE_PROMPT.replace("{blocks}", "\n\n".join(blocks)),
+            max_output_tokens=1024,
+            temperature=0.3,
+        )
         data = json.loads(raw) if raw else {}
     except (ValueError, TypeError):
         return {}
@@ -298,8 +340,9 @@ def _render(state, static):
     rels = {}
     for cid, c in convs.items():
         for name, s in c.get("speakers", {}).items():
-            r = rels.setdefault(name, {"conversations": 0, "words": 0,
-                                       "topics": [], "last": None})
+            r = rels.setdefault(
+                name, {"conversations": 0, "words": 0, "topics": [], "last": None}
+            )
             r["conversations"] += 1
             r["words"] += s["words"]
             topic = (c.get("summary") or c.get("title") or "")[:70]
@@ -338,14 +381,15 @@ def _render(state, static):
             if key in seen_ev:
                 continue
             seen_ev.add(key)
-            events.append({**m, "conversation": c.get("title"),
-                           "date": c.get("date")})
+            events.append({**m, "conversation": c.get("title"), "date": c.get("date")})
 
     L = []
     A = L.append
     A("# User Profile")
-    A(f"_Last updated: {time.strftime('%Y-%m-%d')} "
-      f"· {n_conv} conversation{'s' if n_conv != 1 else ''} processed_")
+    A(
+        f"_Last updated: {time.strftime('%Y-%m-%d')} "
+        f"· {n_conv} conversation{'s' if n_conv != 1 else ''} processed_"
+    )
     A("")
     A("> Built by beeplex from your Bee data. Bee's own claims are marked;")
     A("> unconfirmed facts are Bee's inferences and may be wrong.")
@@ -366,8 +410,10 @@ def _render(state, static):
     for name in names:
         r = rels[name]
         A(f"### {name}")
-        bits = [f"{r['conversations']} conversation{'s' if r['conversations'] != 1 else ''}",
-                f"~{r['words']} words"]
+        bits = [
+            f"{r['conversations']} conversation{'s' if r['conversations'] != 1 else ''}",
+            f"~{r['words']} words",
+        ]
         if r["last"]:
             bits.append(f"last: {r['last']}")
         A(f"- {', '.join(bits)}")
@@ -382,8 +428,7 @@ def _render(state, static):
         for t in buckets["work"]:
             A(f"- {t} _(Bee fact)_")
     if top_topics:
-        A("- Frequent topics: " + "; ".join(
-            f"{t} ({n}×)" for t, n in top_topics))
+        A("- Frequent topics: " + "; ".join(f"{t} ({n}×)" for t, n in top_topics))
     if not buckets["work"] and not top_topics:
         A("- —")
     A("")
@@ -400,7 +445,8 @@ def _render(state, static):
 
     A("## Preferences")
     prefs = buckets["preferences"] + [
-        p for p in state["llm"]["preferences"] if isinstance(p, str)]
+        p for p in state["llm"]["preferences"] if isinstance(p, str)
+    ]
     if prefs:
         for p in prefs:
             A(f"- {p}")
@@ -419,8 +465,7 @@ def _render(state, static):
     A("")
 
     A("## Important Dates & Events")
-    ev_all = events + [e for e in state["llm"]["events"]
-                       if isinstance(e, dict)]
+    ev_all = events + [e for e in state["llm"]["events"] if isinstance(e, dict)]
     if ev_all:
         for e in ev_all[:15]:
             hint = e.get("hint", "")
@@ -435,8 +480,9 @@ def _render(state, static):
     A("")
 
     A("## Notes")
-    notes = buckets["notes"] + [u + " _(unconfirmed — Bee inferred this, "
-                                "may be wrong)_" for u in unconfirmed]
+    notes = buckets["notes"] + [
+        u + " _(unconfirmed — Bee inferred this, may be wrong)_" for u in unconfirmed
+    ]
     for j in static["journals"][:5]:
         text = (j.get("text") or "").strip()
         if text:
@@ -455,14 +501,16 @@ def _render(state, static):
 
 
 def run_profile(full=False, limit=50):
-    """Build/update family/user.md. Returns (path, info)."""
+    """Build/update BEEPLEX_DATA_DIR/user.md. Returns (path, info)."""
     state = _load_state()
     if full:
-        state = {"processed_ids": [], "conversations": {},
-                 "changed_cursor": None,
-                 "llm": {"relationships": {}, "preferences": [],
-                         "events": [], "notes": []},
-                 "runs": state.get("runs", 0)}
+        state = {
+            "processed_ids": [],
+            "conversations": {},
+            "changed_cursor": None,
+            "llm": {"relationships": {}, "preferences": [], "events": [], "notes": []},
+            "runs": state.get("runs", 0),
+        }
     live = _is_live()
 
     targets, new_cursor = _gather_targets(limit, full, state, live)
@@ -493,14 +541,25 @@ def run_profile(full=False, limit=50):
 
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description="Build/update family/user.md "
-                                 "from Bee data.")
-    ap.add_argument("--full", action="store_true",
-                    help="Rebuild from scratch instead of incrementally.")
-    ap.add_argument("--limit", type=int, default=50,
-                    help="Conversations to consider on --full (default: 50).")
+
+    ap = argparse.ArgumentParser(
+        description="Build/update BEEPLEX_DATA_DIR/user.md from Bee data."
+    )
+    ap.add_argument(
+        "--full",
+        action="store_true",
+        help="Rebuild from scratch instead of incrementally.",
+    )
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Conversations to consider on --full (default: 50).",
+    )
     args = ap.parse_args()
     path, info = run_profile(full=args.full, limit=args.limit)
-    print(f"mode={info['mode']} new={info['new_conversations']} "
-          f"total={info['total_conversations']} facts={info['facts']}")
+    print(
+        f"mode={info['mode']} new={info['new_conversations']} "
+        f"total={info['total_conversations']} facts={info['facts']}"
+    )
     print(f"wrote {path}")

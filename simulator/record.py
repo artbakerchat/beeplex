@@ -247,7 +247,7 @@ def append_scenario(scenario):
 def preview_score(scenario):
     """Score the new scenario with the repo's own pipeline pieces."""
     sys.path.insert(0, os.path.dirname(HERE))
-    import bee_fetcher
+    from beeplex import bee_fetcher
 
     conv = {
         "utterances": [

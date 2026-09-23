@@ -18,7 +18,7 @@ Two layers, same philosophy as the engagement pipeline:
 
 Privacy: deterministic mode sends nothing anywhere. The LLM pass sends
 transcript text to the configured provider - the same tradeoff as
-llm_scoring. Summaries land in family/, which is gitignored: never commit
+llm_scoring. Summaries land in BEEPLEX_DATA_DIR/, which is gitignored: never commit
 real patient transcripts.
 
 This is a hackathon demo aid, not a medical device. Deterministic output
@@ -32,8 +32,8 @@ from pathlib import Path
 
 from docx import Document
 
-from bee_fetcher import _is_substantive
-from llm_scoring import (
+from .bee_fetcher import _is_substantive
+from .llm_scoring import (
     API_KEY,
     _bedrock_post,
     _gemini_post,
@@ -77,17 +77,53 @@ PATIENT_CUES = [
 ]
 
 SYMPTOM_WORDS = [
-    "pain", "ache", "aching", "sore", "hurt", "hurts", "tender",
-    "nausea", "nauseous", "vomit", "vomiting",
-    "dizzy", "dizziness", "lightheaded",
-    "fever", "chills", "cough", "headache", "migraine",
-    "fatigue", "tired", "exhausted", "weakness",
-    "swelling", "swollen", "swell", "rash", "itch", "itchy",
-    "numb", "numbness", "tingling", "cramp", "cramps",
-    "shortness of breath", "wheezing", "chest", "palpitations",
-    "bleeding", "bruise", "bruising", "stiff", "stiffness",
+    "pain",
+    "ache",
+    "aching",
+    "sore",
+    "hurt",
+    "hurts",
+    "tender",
+    "nausea",
+    "nauseous",
+    "vomit",
+    "vomiting",
+    "dizzy",
+    "dizziness",
+    "lightheaded",
+    "fever",
+    "chills",
+    "cough",
+    "headache",
+    "migraine",
+    "fatigue",
+    "tired",
+    "exhausted",
+    "weakness",
+    "swelling",
+    "swollen",
+    "swell",
+    "rash",
+    "itch",
+    "itchy",
+    "numb",
+    "numbness",
+    "tingling",
+    "cramp",
+    "cramps",
+    "shortness of breath",
+    "wheezing",
+    "chest",
+    "palpitations",
+    "bleeding",
+    "bruise",
+    "bruising",
+    "stiff",
+    "stiffness",
     # common inflections the \b...\b whole-word match would otherwise miss
-    "swelled", "aches", "hurting",
+    "swelled",
+    "aches",
+    "hurting",
 ]
 
 _ONSET = re.compile(
@@ -119,25 +155,54 @@ _PLAN = re.compile(
 # written as words ("twenty milligrams") in transcripts, so normalize the
 # common ones before matching.
 _NUMWORDS = {
-    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
-    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
-    "fifteen": "15", "twenty": "20", "thirty": "30", "forty": "40",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "fifteen": "15",
+    "twenty": "20",
+    "thirty": "30",
+    "forty": "40",
     "fifty": "50",
 }
 _NUMWORDS_RE = re.compile(
-    r"\b(" + "|".join(_NUMWORDS) + r")\s+(milligrams?|mg)\b", re.IGNORECASE)
+    r"\b(" + "|".join(_NUMWORDS) + r")\s+(milligrams?|mg)\b", re.IGNORECASE
+)
 
 _MED_DOSE = re.compile(
-    r"\b([A-Za-z][A-Za-z\-]{2,})\s+(\d+(?:\.\d+)?)\s*mg\b", re.IGNORECASE)
+    r"\b([A-Za-z][A-Za-z\-]{2,})\s+(\d+(?:\.\d+)?)\s*mg\b", re.IGNORECASE
+)
 _ORPHAN_DOSE = re.compile(r"\b(\d+(?:\.\d+)?)\s*mg\b", re.IGNORECASE)
 # Words that are never a drug name when scanning backwards from a dose.
 _MED_STOPWORDS = {
-    "to", "the", "a", "an", "of", "back", "dose", "doses", "daily",
-    "your", "you", "that", "this", "with", "for", "and", "then", "my",
+    "to",
+    "the",
+    "a",
+    "an",
+    "of",
+    "back",
+    "dose",
+    "doses",
+    "daily",
+    "your",
+    "you",
+    "that",
+    "this",
+    "with",
+    "for",
+    "and",
+    "then",
+    "my",
 }
 _MED_KNOWN = re.compile(
-    r"\b(ibuprofen|acetaminophen|tylenol|aspirin|antibiotics?)\b",
-    re.IGNORECASE)
+    r"\b(ibuprofen|acetaminophen|tylenol|aspirin|antibiotics?)\b", re.IGNORECASE
+)
 _MED_CHANGE = re.compile(
     r"\b(raise[sd]?|increase[sd]?|increasing|lower[sd]?|decrease[sd]?|"
     r"decreasing|drop(?:ped|ping)?|start(?:ed|ing)?|add(?:ed|ing)?|"
@@ -145,16 +210,33 @@ _MED_CHANGE = re.compile(
     re.IGNORECASE,
 )
 _MED_CHANGE_MAP = {
-    "raise": "increased", "raised": "increased", "increase": "increased",
-    "increased": "increased", "increasing": "increased",
-    "lower": "decreased", "lowered": "decreased", "decrease": "decreased",
-    "decreased": "decreased", "decreasing": "decreased",
-    "drop": "decreased", "dropped": "decreased", "dropping": "decreased",
-    "start": "started", "started": "started", "starting": "started",
-    "add": "started", "added": "started", "adding": "started",
-    "stop": "stopped", "stopped": "stopped", "stopping": "stopped",
-    "continue": "continued", "continues": "continued", "continued": "continued",
-    "continuing": "continued", "keep taking": "continued",
+    "raise": "increased",
+    "raised": "increased",
+    "increase": "increased",
+    "increased": "increased",
+    "increasing": "increased",
+    "lower": "decreased",
+    "lowered": "decreased",
+    "decrease": "decreased",
+    "decreased": "decreased",
+    "decreasing": "decreased",
+    "drop": "decreased",
+    "dropped": "decreased",
+    "dropping": "decreased",
+    "start": "started",
+    "started": "started",
+    "starting": "started",
+    "add": "started",
+    "added": "started",
+    "adding": "started",
+    "stop": "stopped",
+    "stopped": "stopped",
+    "stopping": "stopped",
+    "continue": "continued",
+    "continues": "continued",
+    "continued": "continued",
+    "continuing": "continued",
+    "keep taking": "continued",
 }
 _MED_FREQ = re.compile(
     r"\b(daily|every morning|every evening|twice a day|at bedtime|"
@@ -172,8 +254,7 @@ _FOLLOWUP = re.compile(
 
 
 def _normalize_dose_words(text):
-    return _NUMWORDS_RE.sub(
-        lambda m: f"{_NUMWORDS[m.group(1).lower()]} mg", text)
+    return _NUMWORDS_RE.sub(lambda m: f"{_NUMWORDS[m.group(1).lower()]} mg", text)
 
 
 def detect_roles(parts):
@@ -208,10 +289,7 @@ def detect_roles(parts):
 
 def _symptom_hits(text):
     low = text.lower()
-    return [
-        w for w in SYMPTOM_WORDS
-        if re.search(r"\b" + re.escape(w) + r"\b", low)
-    ]
+    return [w for w in SYMPTOM_WORDS if re.search(r"\b" + re.escape(w) + r"\b", low)]
 
 
 def _trim(text, n=140):
@@ -243,7 +321,7 @@ def extract_medications(substantive):
     def change_before(name_start):
         # Change verbs precede the drug ("raised the lisinopril", "add
         # amlodipine") - a verb after the mention belongs to another drug.
-        cm = _MED_CHANGE.search(text[max(0, name_start - 40): name_start])
+        cm = _MED_CHANGE.search(text[max(0, name_start - 40) : name_start])
         return _MED_CHANGE_MAP.get(cm.group(1).lower()) if cm else None
 
     for _, t in substantive:
@@ -252,32 +330,42 @@ def extract_medications(substantive):
         for m in _MED_DOSE.finditer(text):
             direct_spans.append(m.span())
             name, dose = m.group(1), f"{m.group(2)} mg"
-            window = text[max(0, m.start() - 40): m.end() + 40]
+            window = text[max(0, m.start() - 40) : m.end() + 40]
             fm = _MED_FREQ.search(window)
-            note(name, dose, fm.group(1).lower() if fm else None,
-                 change_before(m.start(1)))
+            note(
+                name,
+                dose,
+                fm.group(1).lower() if fm else None,
+                change_before(m.start(1)),
+            )
         for m in _ORPHAN_DOSE.finditer(text):
             # "raised the lisinopril to 20 mg" - the name rides ahead of the
             # dose with small words between. Scan backwards past stopwords.
             if any(s <= m.start() < e for s, e in direct_spans):
                 continue
             base = max(0, m.start() - 50)
-            before = text[base: m.start()]
+            before = text[base : m.start()]
             known = _MED_KNOWN.search(before)
             if known:
                 name, name_start = known.group(1), base + known.start()
             else:
-                words = [w for w in
-                         re.findall(r"[A-Za-z\-]{4,}", before)
-                         if w.lower() not in _MED_STOPWORDS]
+                words = [
+                    w
+                    for w in re.findall(r"[A-Za-z\-]{4,}", before)
+                    if w.lower() not in _MED_STOPWORDS
+                ]
                 if not words:
                     continue
                 name = words[-1]
                 name_start = base + before.lower().rfind(name.lower())
             dose = f"{m.group(1)} mg"
-            fm = _MED_FREQ.search(text[max(0, m.start() - 40): m.end() + 40])
-            note(name, dose, fm.group(1).lower() if fm else None,
-                 change_before(name_start))
+            fm = _MED_FREQ.search(text[max(0, m.start() - 40) : m.end() + 40])
+            note(
+                name,
+                dose,
+                fm.group(1).lower() if fm else None,
+                change_before(name_start),
+            )
         for m in _MED_KNOWN.finditer(text):
             name = m.group(1).lower()
             if any(k == name for k in meds):
@@ -295,8 +383,11 @@ def extract_followup(substantive, roles):
         m = _FOLLOWUP.search(_normalize_dose_words(t))
         if m:
             when = m.group(1).lower()
-            when = re.sub(r"\b(one|two|three|four|five|six|seven|eight|nine|ten)\b",
-                          lambda mm: _NUMWORDS[mm.group(1)], when)
+            when = re.sub(
+                r"\b(one|two|three|four|five|six|seven|eight|nine|ten)\b",
+                lambda mm: _NUMWORDS[mm.group(1)],
+                when,
+            )
             return when
     return None
 
@@ -311,8 +402,7 @@ def _dedupe_words(words):
 
 
 def _render_med(m):
-    bits = " ".join(x for x in (m.get("name"), m.get("dose"),
-                                m.get("frequency")) if x)
+    bits = " ".join(x for x in (m.get("name"), m.get("dose"), m.get("frequency")) if x)
     if m.get("change"):
         bits += f" ({m['change']})"
     return bits
@@ -351,26 +441,26 @@ def extract_clinical(parts):
             continue
         onset = _ONSET.search(t)
         severity = _SEVERITY.search(t)
-        symptoms.append({
-            "text": _trim(t),
-            "symptoms": hits,
-            "onset": onset.group(0) if onset else None,
-            "change": change.group(1) if change else None,
-            "severity": severity.group(0) if severity else None,
-        })
+        symptoms.append(
+            {
+                "text": _trim(t),
+                "symptoms": hits,
+                "onset": onset.group(0) if onset else None,
+                "change": change.group(1) if change else None,
+                "severity": severity.group(0) if severity else None,
+            }
+        )
     symptoms = symptoms[:8]
 
     patient_turns = [t for s, t in substantive if is_patient(s)]
-    complaint_src = (
-        next((t for t in patient_turns if _symptom_hits(t)), None)
-        or next(iter(patient_turns), "")
+    complaint_src = next((t for t in patient_turns if _symptom_hits(t)), None) or next(
+        iter(patient_turns), ""
     )
     chief_complaint = _trim(complaint_src, 160)
 
-    patient_concerns = [
-        _trim(t) for s, t in substantive
-        if is_patient(s) and "?" in t
-    ][:5]
+    patient_concerns = [_trim(t) for s, t in substantive if is_patient(s) and "?" in t][
+        :5
+    ]
 
     plan = []
     for s, t in substantive:
@@ -392,16 +482,17 @@ def extract_clinical(parts):
     ]
     changed = [s for s in symptoms if s["change"]]
     if changed:
-        words = _dedupe_words(
-            w for s in changed[:3] for w in s["symptoms"])
-        handoff.append("Changes: " + "; ".join(
-            f"{', '.join(w for w in s['symptoms'] if w in words)}"
-            f" ({s['change']})"
-            for s in changed[:3]
-            if any(w in words for w in s["symptoms"])))
+        words = _dedupe_words(w for s in changed[:3] for w in s["symptoms"])
+        handoff.append(
+            "Changes: "
+            + "; ".join(
+                f"{', '.join(w for w in s['symptoms'] if w in words)} ({s['change']})"
+                for s in changed[:3]
+                if any(w in words for w in s["symptoms"])
+            )
+        )
     elif symptoms:
-        words = _dedupe_words(
-            w for s in symptoms[:3] for w in s["symptoms"])
+        words = _dedupe_words(w for s in symptoms[:3] for w in s["symptoms"])
         handoff.append("Reported: " + "; ".join(words))
     else:
         handoff.append("No symptoms detected in transcript")
@@ -411,8 +502,7 @@ def extract_clinical(parts):
     if plan:
         tail.append("Next steps: " + " / ".join(plan[:2]))
     if medications:
-        tail.append("Meds: " + "; ".join(
-            _render_med(m) for m in medications[:4]))
+        tail.append("Meds: " + "; ".join(_render_med(m) for m in medications[:4]))
     if follow_up:
         tail.append(f"Follow-up: in {follow_up}")
     handoff.append(" | ".join(tail) if tail else "No open questions or orders detected")
@@ -422,8 +512,11 @@ def extract_clinical(parts):
     # this is not a clean bill of health - it usually means the verbal
     # channel failed and the real concern never made it into words.
     patient_turns = [t for s, t in parts if is_patient(s) and t.strip()]
-    avg_words = (sum(len(t.split()) for t in patient_turns) / len(patient_turns)
-                 if patient_turns else 0)
+    avg_words = (
+        sum(len(t.split()) for t in patient_turns) / len(patient_turns)
+        if patient_turns
+        else 0
+    )
     sparse_transcript = bool(
         patient_turns
         and avg_words < 6
@@ -444,6 +537,7 @@ def extract_clinical(parts):
         "handoff": handoff,
         "sparse_transcript": sparse_transcript,
     }
+
 
 # ---------------------------------------------------------------------------
 # Optional LLM pass (Gemini -> Bedrock Nova, same chain as llm_scoring)
@@ -526,6 +620,7 @@ def clinical_batch(items):
 # One-page encounter summary (the deliverable)
 # ---------------------------------------------------------------------------
 
+
 # Design note (2026-09-21): "None detected" is not a clean bill of health.
 # The extractor only reports what it can positively find, so an empty section
 # means *absence of evidence*, never *evidence of absence*. A terse patient
@@ -569,7 +664,7 @@ def write_clinical_docx(path, title, rec_date, det, llm):
             )
             line = f"{bits}" + (f" - {extras}" if extras else "")
             p = doc.add_paragraph(line, style="List Bullet")
-            p.add_run(f"\n\"{s['text']}\"")
+            p.add_run(f'\n"{s["text"]}"')
     else:
         doc.add_paragraph("None detected.")
 
@@ -617,6 +712,7 @@ def write_clinical_docx(path, title, rec_date, det, llm):
 # Fetch + run
 # ---------------------------------------------------------------------------
 
+
 def fetch_encounters(limit=10):
     """Pull raw encounter transcripts via the Bee CLI.
 
@@ -626,7 +722,7 @@ def fetch_encounters(limit=10):
     only. Empty when the CLI is missing/unauthenticated (use the simulator
     to demo without hardware).
     """
-    from bee_fetcher import (
+    from .bee_fetcher import (
         MOCK_FORCED,
         BEE_CMD,
         cli_available,
@@ -656,20 +752,26 @@ def fetch_encounters(limit=10):
             or source.get("summary")
             or (f"Encounter {conv_id}" if conv_id is not None else "Encounter")
         )
-        encounters.append({
-            "id": conv_id,
-            "title": str(title)[:80],
-            "date": _recording_date(source),
-            "parts": parts,
-            "events": events,
-        })
-    return encounters, {"mode": "live",
-                        "detail": f"{len(encounters)} encounters via Bee CLI"}
+        encounters.append(
+            {
+                "id": conv_id,
+                "title": str(title)[:80],
+                "date": _recording_date(source),
+                "parts": parts,
+                "events": events,
+            }
+        )
+    return encounters, {
+        "mode": "live",
+        "detail": f"{len(encounters)} encounters via Bee CLI",
+    }
 
 
 def run_clinical(limit=10, out_dir=None):
     """Run clinical mode: extract + write one summary docx per encounter."""
-    out_dir = Path(out_dir or Path(__file__).resolve().parent / "family")
+    from .config import DATA_DIR
+
+    out_dir = Path(out_dir or DATA_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     encounters, info = fetch_encounters(limit)
@@ -677,8 +779,11 @@ def run_clinical(limit=10, out_dir=None):
         print(f"Clinical mode: {info['detail']}.")
         return []
 
-    llm_map = (clinical_batch([(str(e["id"]), e["parts"]) for e in encounters])
-               if llm_available() else {})
+    llm_map = (
+        clinical_batch([(str(e["id"]), e["parts"]) for e in encounters])
+        if llm_available()
+        else {}
+    )
     if llm_map:
         print("LLM enrichment: on (handoff refined by provider)")
     else:

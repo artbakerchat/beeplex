@@ -5,4 +5,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$PWD/simulator:$PATH"
-exec python3 family.py "$@"
+exec python3 -m beeplex.reports "$@"

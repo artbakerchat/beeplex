@@ -50,7 +50,7 @@ For example, to benchmark the repo's current deterministic scorer:
 import json
 import os
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURES = os.path.join(HERE, "simulator", "conversations.json")
 
 BACKCHANNELS = {

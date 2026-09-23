@@ -1,8 +1,9 @@
 """Coaching dashboard: local HTML report + trend history.
 
-Every fetch_report_data() run regenerates family/dashboard.html and - for
+Report generation regenerates dashboard.html and - for
 live runs - appends that run's per-conversation scores to
-family/history.json. The history stores scores and signal values only,
+history.json in BEEPLEX_DATA_DIR. Read-only scoring does not write either file.
+The history stores scores and signal values only,
 never transcripts. The dashboard shows:
 
   * this run's conversations ranked by engagement, with the one-line
@@ -21,9 +22,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from temporal_scoring import top_repeats
+from .temporal_scoring import top_repeats
 
-OUTPUT_DIR = Path(__file__).resolve().parent / "family"
+from .config import DATA_DIR as OUTPUT_DIR
+
 HISTORY_PATH = OUTPUT_DIR / "history.json"
 DASHBOARD_PATH = OUTPUT_DIR / "dashboard.html"
 # Bound the history file; oldest runs drop off the end.
@@ -32,7 +34,7 @@ MAX_RUNS = 200
 
 def _load_history():
     try:
-        data = json.loads(HISTORY_PATH.read_text())
+        data = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
         if isinstance(data, dict) and isinstance(data.get("runs"), list):
             return data
     except (OSError, ValueError):
@@ -41,7 +43,7 @@ def _load_history():
 
 
 def _save_history(history):
-    HISTORY_PATH.write_text(json.dumps(history, indent=1))
+    HISTORY_PATH.write_text(json.dumps(history, indent=1), encoding="utf-8")
 
 
 def _score(d):
@@ -80,45 +82,77 @@ def coaching_tips(bd, repeats):
     det = bd["det"]["signals"]
     n = bd["n_substantive"]
     if n < 5:
-        tips.append(("thin",
-                     f"Thin evidence \u2014 only {n} substantive turns, so this "
-                     "score is capped at Moderate no matter what the signals say."))
+        tips.append(
+            (
+                "thin",
+                f"Thin evidence \u2014 only {n} substantive turns, so this "
+                "score is capped at Moderate no matter what the signals say.",
+            )
+        )
     shares = bd["speaker_shares"]
     if shares:
         top_share = max(shares.values())
         if top_share >= 0.7:
             who = max(shares, key=shares.get)
-            tips.append(("balance",
-                         f"One voice ({who}) is doing {round(top_share * 100)}% "
-                         "of the talking \u2014 draw the other person out with "
-                         "a direct question."))
+            tips.append(
+                (
+                    "balance",
+                    f"One voice ({who}) is doing {round(top_share * 100)}% "
+                    "of the talking \u2014 draw the other person out with "
+                    "a direct question.",
+                )
+            )
         elif det.get("balance", 1) < 0.5:
-            tips.append(("balance",
-                         "Talk time is lopsided \u2014 invite the quieter "
-                         "voice in before moving on."))
+            tips.append(
+                (
+                    "balance",
+                    "Talk time is lopsided \u2014 invite the quieter "
+                    "voice in before moving on.",
+                )
+            )
     if det.get("interactivity", 1) < 0.5:
-        tips.append(("interactivity",
-                     "Long solo stretches with few handoffs \u2014 shorter "
-                     "turns back and forth build energy."))
+        tips.append(
+            (
+                "interactivity",
+                "Long solo stretches with few handoffs \u2014 shorter "
+                "turns back and forth build energy.",
+            )
+        )
     if det.get("curiosity", 1) < 0.4:
-        tips.append(("curiosity",
-                     "Few follow-up questions \u2014 a well-placed "
-                     "\u201cwhy\u201d is the cheapest engagement boost there is."))
+        tips.append(
+            (
+                "curiosity",
+                "Few follow-up questions \u2014 a well-placed "
+                "\u201cwhy\u201d is the cheapest engagement boost there is.",
+            )
+        )
     if det.get("depth", 1) < 0.5:
-        tips.append(("depth",
-                     "Answers are staying surface-level \u2014 ask one question "
-                     "that can't be answered in a sentence."))
+        tips.append(
+            (
+                "depth",
+                "Answers are staying surface-level \u2014 ask one question "
+                "that can't be answered in a sentence.",
+            )
+        )
     energy = bd["energy"]
     if energy:
         es = energy["signals"]
         if es.get("pace", 1) < 0.4:
-            tips.append(("pace",
-                         "The pace is dragging \u2014 pick up the tempo before "
-                         "the energy leaks out."))
+            tips.append(
+                (
+                    "pace",
+                    "The pace is dragging \u2014 pick up the tempo before "
+                    "the energy leaks out.",
+                )
+            )
         if es.get("responsiveness", 1) < 0.4:
-            tips.append(("responsiveness",
-                         "Long pauses after substantive turns \u2014 replies "
-                         "are landing late."))
+            tips.append(
+                (
+                    "responsiveness",
+                    "Long pauses after substantive turns \u2014 replies "
+                    "are landing late.",
+                )
+            )
     fm = bd["fm"]
     fs = {}
     if fm:
@@ -126,20 +160,32 @@ def coaching_tips(bd, repeats):
         circ = fs.get("circularity", 0) or 0
         if circ > 0.25:
             if repeats:
-                shown = ", ".join(f"\u201c{p}\u201d ({c}\u00d7)"
-                                  for p, c in repeats[:2])
-                tips.append(("circularity",
-                             f"Looping detected \u2014 {shown}. "
-                             "Say it once and move on."))
+                shown = ", ".join(
+                    f"\u201c{p}\u201d ({c}\u00d7)" for p, c in repeats[:2]
+                )
+                tips.append(
+                    (
+                        "circularity",
+                        f"Looping detected \u2014 {shown}. Say it once and move on.",
+                    )
+                )
             else:
-                tips.append(("circularity",
-                             "Looping detected \u2014 the same phrases keep "
-                             "coming back. Say it once and move on."))
+                tips.append(
+                    (
+                        "circularity",
+                        "Looping detected \u2014 the same phrases keep "
+                        "coming back. Say it once and move on.",
+                    )
+                )
         nov = fs.get("novelty")
         if nov is not None and nov < 0.7:
-            tips.append(("novelty",
-                         "Same ground covered repeatedly \u2014 name one thing "
-                         "that's new since the last turn."))
+            tips.append(
+                (
+                    "novelty",
+                    "Same ground covered repeatedly \u2014 name one thing "
+                    "that's new since the last turn.",
+                )
+            )
     spin = fs.get("spinning", 0) or 0
     if spin > 0.3:
         bits = []
@@ -148,33 +194,61 @@ def coaching_tips(bd, repeats):
         if (fs.get("circling_markers") or 0) >= 0.2:
             bits.append("the same charges keep resurfacing")
         if (fs.get("absolutist") or 0) >= 0.2:
-            bits.append("absolutes like \u201calways\u201d/\u201cnever\u201d "
-                        "are flying")
+            bits.append(
+                "absolutes like \u201calways\u201d/\u201cnever\u201d are flying"
+            )
         detail = "; ".join(bits) if bits else "the exchange is looping"
-        tips.append(("spinning",
-                     f"Going in circles \u2014 {detail}. Name the one thing "
-                     "this conversation needs to decide."))
+        tips.append(
+            (
+                "spinning",
+                f"Going in circles \u2014 {detail}. Name the one thing "
+                "this conversation needs to decide.",
+            )
+        )
     fmb = bd["fm_blended"]
     eng = bd["engagement"]
     if fmb and fmb["score"] < 4 <= eng["score"]:
-        tips.append(("stuck",
-                     "Lots of heat, little movement \u2014 summarize where you "
-                     "agree and decide the next step."))
+        tips.append(
+            (
+                "stuck",
+                "Lots of heat, little movement \u2014 summarize where you "
+                "agree and decide the next step.",
+            )
+        )
     llm = bd["llm"] or {}
     tone = llm.get("tone")
     if tone is not None and tone <= 4:
         tl = (llm.get("tone_label") or "").strip()
-        tips.append(("tone",
-                     f"Tone is running tense{f' ({tl})' if tl else ''} "
-                     "\u2014 acknowledge the friction before pushing your point."))
+        tips.append(
+            (
+                "tone",
+                f"Tone is running tense{f' ({tl})' if tl else ''} "
+                "\u2014 acknowledge the friction before pushing your point.",
+            )
+        )
     if not tips and eng["score"] >= 7 and (fmb is None or fmb["score"] >= 7):
-        tips.append(("keep",
-                     "Strong conversation \u2014 balanced, moving, landing. "
-                     "Keep doing exactly this."))
-    order = {"thin": 0, "spinning": 1, "circularity": 2, "stuck": 3,
-             "balance": 4, "tone": 5, "interactivity": 6, "responsiveness": 7,
-             "pace": 8, "curiosity": 9, "depth": 10, "novelty": 11,
-             "keep": 99}
+        tips.append(
+            (
+                "keep",
+                "Strong conversation \u2014 balanced, moving, landing. "
+                "Keep doing exactly this.",
+            )
+        )
+    order = {
+        "thin": 0,
+        "spinning": 1,
+        "circularity": 2,
+        "stuck": 3,
+        "balance": 4,
+        "tone": 5,
+        "interactivity": 6,
+        "responsiveness": 7,
+        "pace": 8,
+        "curiosity": 9,
+        "depth": 10,
+        "novelty": 11,
+        "keep": 99,
+    }
     tips.sort(key=lambda t: order.get(t[0], 50))
     return [t[1] for t in tips[:6]]
 
@@ -194,29 +268,55 @@ def _signal_rows(bd):
     rows = []
     for name in ("balance", "interactivity", "curiosity", "depth"):
         if name in bd["det"]["signals"]:
-            rows.append({"domain": "Deterministic", "name": name.capitalize(),
-                         "value": bd["det"]["signals"][name], "invert": False})
+            rows.append(
+                {
+                    "domain": "Deterministic",
+                    "name": name.capitalize(),
+                    "value": bd["det"]["signals"][name],
+                    "invert": False,
+                }
+            )
     energy = bd["energy"]
     if energy:
         for name in ("pace", "responsiveness"):
             if name in energy["signals"]:
-                rows.append({"domain": "Temporal \u00b7 energy",
-                             "name": name.capitalize(),
-                             "value": energy["signals"][name], "invert": False})
+                rows.append(
+                    {
+                        "domain": "Temporal \u00b7 energy",
+                        "name": name.capitalize(),
+                        "value": energy["signals"][name],
+                        "invert": False,
+                    }
+                )
     fm = bd["fm"]
     if fm:
-        rows.append({"domain": "Temporal \u00b7 forward motion",
-                     "name": "Circularity",
-                     "value": fm["signals"].get("circularity", 0) or 0,
-                     "invert": True, "note": "lower is better"})
+        rows.append(
+            {
+                "domain": "Temporal \u00b7 forward motion",
+                "name": "Circularity",
+                "value": fm["signals"].get("circularity", 0) or 0,
+                "invert": True,
+                "note": "lower is better",
+            }
+        )
         if fm["signals"].get("novelty") is not None:
-            rows.append({"domain": "Temporal \u00b7 forward motion",
-                         "name": "Novelty",
-                         "value": fm["signals"]["novelty"], "invert": False})
-        rows.append({"domain": "Temporal \u00b7 forward motion",
-                     "name": "Spinning",
-                     "value": fm["signals"].get("spinning", 0) or 0,
-                     "invert": True, "note": "lower is better"})
+            rows.append(
+                {
+                    "domain": "Temporal \u00b7 forward motion",
+                    "name": "Novelty",
+                    "value": fm["signals"]["novelty"],
+                    "invert": False,
+                }
+            )
+        rows.append(
+            {
+                "domain": "Temporal \u00b7 forward motion",
+                "name": "Spinning",
+                "value": fm["signals"].get("spinning", 0) or 0,
+                "invert": True,
+                "note": "lower is better",
+            }
+        )
     return rows
 
 
@@ -246,11 +346,15 @@ def _make_card(e, history):
         delta = spark[-1] - spark[-2]
         trend = "up" if delta >= 0.5 else ("down" if delta <= -0.5 else "flat")
     return {
-        "id": e["id"], "title": e["title"], "date": e["date"],
-        "det": _score(bd["det"]), "detLabel": (bd["det"] or {}).get("label"),
+        "id": e["id"],
+        "title": e["title"],
+        "date": e["date"],
+        "det": _score(bd["det"]),
+        "detLabel": (bd["det"] or {}).get("label"),
         "energy": _score(bd["energy"]),
         "fm": _score(bd["fm"]),
-        "llmEng": llm.get("engagement"), "llmProg": llm.get("progress"),
+        "llmEng": llm.get("engagement"),
+        "llmProg": llm.get("progress"),
         "llmProgLabel": (llm.get("progress_label") or "").strip() or None,
         "llmRationale": llm.get("rationale"),
         "toneDisplay": _tone_display(bd),
@@ -259,8 +363,10 @@ def _make_card(e, history):
         "fmBase": _score(bd["fm_blended"]),
         "fmBaseLabel": (bd["fm_blended"] or {}).get("label"),
         "signalRows": _signal_rows(bd),
-        "tips": tips, "headline": headline(bd, tips),
-        "spark": spark, "trend": trend,
+        "tips": tips,
+        "headline": headline(bd, tips),
+        "spark": spark,
+        "trend": trend,
         "nSubstantive": bd["n_substantive"],
     }
 
@@ -276,15 +382,18 @@ def record_run(entries, info):
     history = _load_history()
     now = datetime.now(timezone.utc)
     if info.get("mode") == "live" and entries:
-        history["runs"].append({
-            "ts": now.isoformat(),
-            "conversations": [_history_entry(e) for e in entries],
-        })
+        history["runs"].append(
+            {
+                "ts": now.isoformat(),
+                "conversations": [_history_entry(e) for e in entries],
+            }
+        )
         history["runs"] = history["runs"][-MAX_RUNS:]
         _save_history(history)
         # Bee's memory: one line per conversation about what it was
         # about. Live runs only; mock/demo runs never record.
-        from bee_persona import record_moments
+        from .bee_persona import record_moments
+
         record_moments(entries, now.isoformat())
     cards = [_make_card(e, history) for e in entries]
     _write_dashboard(cards, info, history, now)
@@ -349,7 +458,7 @@ footer{color:var(--muted);font-size:12px;margin:24px 0}
 <h2>Coaching</h2>
 <div id="cards"></div>
 
-<footer>Scores: deterministic (structure) + temporal (motion) + semantic (meaning, one Gemini call per run, needs API key). Engagement is the heat; forward motion is whether the heat cooks anything. History: the last __NRUNS__ runs, kept locally in <code>family/history.json</code>.</footer>
+<footer>Scores: deterministic (structure) + temporal (motion) + semantic (meaning, one Gemini call per run, needs API key). Engagement is the heat; forward motion is whether the heat cooks anything. History: the last __NRUNS__ runs, kept locally in <code>BEEPLEX_DATA_DIR/history.json</code>.</footer>
 </div>
 <script>
 var META=__RUN_META__;
@@ -407,4 +516,4 @@ def _write_dashboard(cards, info, history, now):
     html = _TEMPLATE.replace("__RUN_META__", json.dumps(meta))
     html = html.replace("__CARDS__", json.dumps(cards))
     html = html.replace("__NRUNS__", str(len(history["runs"])))
-    DASHBOARD_PATH.write_text(html)
+    DASHBOARD_PATH.write_text(html, encoding="utf-8")

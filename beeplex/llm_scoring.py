@@ -7,6 +7,7 @@ paraphrase-level restating can't be caught deterministically, so this is
 the LLM's job), and a one-sentence semantic memory of what the
 conversation was about (the "moment" Bee keeps in moments.json).
 
+Requires explicit opt-in with BEEPLEX_LLM=1; disabled in demo mode.
 Two providers, one shared prompt. Gemini is tried first when
 ``GEMINI_API_KEY`` (or ``GOOGLE_API_KEY``) is set; if it is missing or the
 call fails, AWS Bedrock (Nova) is tried via boto3 using your local AWS
@@ -21,25 +22,18 @@ provider this module does nothing. Any API failure also degrades silently
 to the deterministic score.
 
 Privacy: enabling this sends your transcript text to Google's and/or
-Amazon's API. Keys live only in your environment or a gitignored .env
-file - never in the repo, never in the reports.
+Amazon's API. Keys live only in your process environment, never in reports.
 
 boto3 is a hard dependency for the Bedrock path; without it (or without
-AWS credentials) that path is skipped silently. python-dotenv is optional
-- if installed, a .env file in the working directory is loaded
-automatically.
+AWS credentials) that path is skipped silently. Environment files are not
+loaded implicitly from the client's working directory.
 """
 
 import json
 import os
 import urllib.request
 
-try:
-    from dotenv import load_dotenv
-except ImportError:  # optional dependency; plain env vars still work
-    pass
-else:
-    load_dotenv()  # GEMINI_API_KEY from a .env file if present
+from .config import LLM_ENABLED
 
 API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
@@ -51,9 +45,7 @@ ENDPOINT = (
 # for Canada). Override with BEDROCK_REGION / BEDROCK_MODEL as needed;
 # AWS_REGION is also honored for the region.
 BEDROCK_REGION = (
-    os.environ.get("BEDROCK_REGION")
-    or os.environ.get("AWS_REGION")
-    or "ca-central-1"
+    os.environ.get("BEDROCK_REGION") or os.environ.get("AWS_REGION") or "ca-central-1"
 )
 BEDROCK_MODEL = os.environ.get("BEDROCK_MODEL", "us.amazon.nova-lite-v1:0")
 TIMEOUT = 30
@@ -75,6 +67,8 @@ Conversations:
 
 def available():
     """True when an LLM provider looks configured (does not verify it)."""
+    if not LLM_ENABLED:
+        return False
     if API_KEY:
         return True
     try:
@@ -101,11 +95,17 @@ def _transcript_text(parts, max_chars=MAX_CHARS):
 
 def _gemini_post(prompt_text, max_output_tokens, temperature=0.2):
     """POST prompt_text to Gemini, return the raw reply text or None."""
-    body = json.dumps({
-        "contents": [{"parts": [{"text": prompt_text}]}],
-        "generationConfig": {"temperature": temperature,
-                             "maxOutputTokens": max_output_tokens},
-    }).encode()
+    if not LLM_ENABLED:
+        return None
+    body = json.dumps(
+        {
+            "contents": [{"parts": [{"text": prompt_text}]}],
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": max_output_tokens,
+            },
+        }
+    ).encode()
     req = urllib.request.Request(
         ENDPOINT + f"?key={API_KEY}",
         data=body,
@@ -132,6 +132,8 @@ def _bedrock_post(prompt_text, max_output_tokens, temperature=0.2):
     Returns the raw reply text or None. Uses boto3's default credential
     chain (env vars, ~/.aws/credentials, IAM role) - no key handling here.
     """
+    if not LLM_ENABLED:
+        return None
     try:
         import boto3
     except ImportError:

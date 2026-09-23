@@ -1,0 +1,132 @@
+BEEPLEX WITH REAL BEE DATA
+===========================
+
+Run these commands in PowerShell from:
+
+  C:\Users\WVML\Downloads\project\beeplex
+
+
+1. Enable Bee Developer Mode
+----------------------------
+
+In the Bee mobile app:
+
+  1. Open Settings.
+  2. Find the app version.
+  3. Tap the version five times.
+
+
+2. Install and authenticate the Bee CLI
+---------------------------------------
+
+  npm install -g @beeai/cli
+  bee version
+  bee login
+  bee status
+  bee ping
+  bee me --json
+
+Test that real data is available:
+
+  bee now --json
+  bee today --context --json
+
+
+3. Check BeePlex live mode
+--------------------------
+
+  .\.venv\Scripts\python.exe -m beeplex --check
+
+The result should contain:
+
+  "mode": "live"
+  "connected": true
+
+If it says demo, clear demo variables in the current PowerShell window:
+
+  Remove-Item Env:BEEPLEX_DEMO -ErrorAction SilentlyContinue
+  Remove-Item Env:BEEX_MOCK -ErrorAction SilentlyContinue
+  .\.venv\Scripts\python.exe -m beeplex --check
+
+
+4. Register the live BeePlex server with Codex
+----------------------------------------------
+
+Remove the demo registration:
+
+  codex mcp remove beeplex
+
+Register the live server:
+
+  codex mcp add beeplex -- `
+    "$PWD\.venv\Scripts\python.exe" -m beeplex
+
+Confirm it is enabled:
+
+  codex mcp list
+
+The row should show:
+
+  enabled
+
+"Unsupported" in the Auth column is normal. BeePlex is a local server and does
+not use OAuth.
+
+
+5. Start chatting
+-----------------
+
+  codex
+
+Ask Codex:
+
+  Is my Bee connected?
+  What have I been talking about today?
+  Find the conversation about the launch.
+  What commitments do I have?
+  How did my recent conversations go?
+  Write Bee's diary.
+
+Codex starts BeePlex automatically. Do not run the MCP server manually in a
+separate terminal; it waits for MCP messages and will appear idle.
+
+
+6. If Codex cannot find the Bee CLI
+------------------------------------
+
+Find the Bee executable:
+
+  (Get-Command bee).Source
+
+Register BeePlex with that exact path:
+
+  $beePath = (Get-Command bee).Source
+  codex mcp remove beeplex
+  codex mcp add beeplex `
+    --env "BEE_CLI=$beePath" `
+    -- "$PWD\.venv\Scripts\python.exe" -m beeplex
+
+
+7. Generated files
+------------------
+
+Live files are saved by default under:
+
+  C:\Users\WVML\.beeplex\
+
+This includes reports, the dashboard, Bee's diary, and the user profile.
+Override the location when registering Codex if desired:
+
+  codex mcp remove beeplex
+  codex mcp add beeplex `
+    --env "BEEPLEX_DATA_DIR=C:\Users\WVML\Documents\BeePlexData" `
+    -- "$PWD\.venv\Scripts\python.exe" -m beeplex
+
+
+Privacy notes
+-------------
+
+BeePlex reads Bee data and does not modify Bee conversations, facts, or todos.
+Searching and reading do not create files. Reports, diary entries, and profile
+refreshes write local files. Optional LLM enrichment is disabled by default.
+

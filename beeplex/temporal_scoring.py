@@ -59,7 +59,7 @@ def _words(text):
 def _ngram_counts(words, n):
     counts = {}
     for i in range(len(words) - n + 1):
-        phrase = " ".join(words[i:i + n])
+        phrase = " ".join(words[i : i + n])
         counts[phrase] = counts.get(phrase, 0) + 1
     return counts
 
@@ -97,7 +97,7 @@ def effective_words(text):
     for size in (4, 3):
         positions = {}
         for i in range(n - size + 1):
-            positions.setdefault(" ".join(words[i:i + size]), []).append(i)
+            positions.setdefault(" ".join(words[i : i + size]), []).append(i)
         for phrase_positions in positions.values():
             if len(phrase_positions) >= 2:
                 # First occurrence kept; later ones are looped filler.
@@ -114,7 +114,7 @@ def top_repeats(parts, limit=3):
     phrase's highest single-turn count. Used by the coaching dashboard to
     show the user exactly what they kept saying on loop.
     """
-    from bee_fetcher import _is_substantive
+    from .bee_fetcher import _is_substantive
 
     agg = {}
     for _, text in parts:
@@ -141,23 +141,40 @@ def circularity(text):
 # Absolutist language: "you always/never", bare always/never, "exact same".
 # Well-established markers of heated, stuck exchanges - and purely lexical.
 _ABSOLUTIST_RES = [
-    re.compile(p) for p in (
-        r"\byou always\b", r"\byou never\b",
-        r"\balways\b", r"\bnever\b",
-        r"\bexact same\b", r"\bevery single time\b",
+    re.compile(p)
+    for p in (
+        r"\byou always\b",
+        r"\byou never\b",
+        r"\balways\b",
+        r"\bnever\b",
+        r"\bexact same\b",
+        r"\bevery single time\b",
     )
 ]
 # Circling rhetoric: the stock phrases people reach for when an exchange
 # is looping instead of advancing. Small, transparent, documented - not a
 # sentiment model.
 _CIRCLING_PHRASES = (
-    "as i said", "like i said", "like i told you", "i already told you",
-    "i've told you", "i have told you",
-    "we've been over this", "we have been over this", "been through this",
-    "don't even start", "dont even start", "do not even start",
-    "stop twisting", "twisting my words", "twisting things",
-    "for a change", "for once",
-    "here we go again", "not this again", "again with this",
+    "as i said",
+    "like i said",
+    "like i told you",
+    "i already told you",
+    "i've told you",
+    "i have told you",
+    "we've been over this",
+    "we have been over this",
+    "been through this",
+    "don't even start",
+    "dont even start",
+    "do not even start",
+    "stop twisting",
+    "twisting my words",
+    "twisting things",
+    "for a change",
+    "for once",
+    "here we go again",
+    "not this again",
+    "again with this",
     "just admit",
 )
 
@@ -165,11 +182,30 @@ _CIRCLING_PHRASES = (
 # analysis often revisit an idea while adding detail or drawing a conclusion.
 # These lightweight markers are evidence that a turn is doing that work.
 _BUILDING_PHRASES = (
-    "because", "for example", "for instance", "however", "but", "although",
-    "which means", "that means", "so", "therefore", "as a result",
-    "on the other hand", "in contrast", "the evidence", "the reason",
-    "then", "next", "finally", "we should", "let's", "lets", "i think",
-    "my point", "in conclusion",
+    "because",
+    "for example",
+    "for instance",
+    "however",
+    "but",
+    "although",
+    "which means",
+    "that means",
+    "so",
+    "therefore",
+    "as a result",
+    "on the other hand",
+    "in contrast",
+    "the evidence",
+    "the reason",
+    "then",
+    "next",
+    "finally",
+    "we should",
+    "let's",
+    "lets",
+    "i think",
+    "my point",
+    "in conclusion",
 )
 _BUILDING_RES = [
     re.compile(r"\b" + re.escape(phrase).replace(r"\ ", r"\s+") + r"\b")
@@ -195,14 +231,13 @@ def productive_progress(parts):
     repetition (for example, sports analysis or music discussion) from being
     penalized as heavily as an exchange that only repeats its position.
     """
-    from bee_fetcher import _is_substantive
+    from .bee_fetcher import _is_substantive
 
     turns = [t.lower() for _, t in parts if _is_substantive(t)]
     if len(turns) < 2:
         return {"score": 0.0, "signals": {}}
     marked = sum(
-        1 for text in turns
-        if any(pattern.search(text) for pattern in _BUILDING_RES)
+        1 for text in turns if any(pattern.search(text) for pattern in _BUILDING_RES)
     )
     score = round(marked / len(turns), 3)
     return {"score": score, "signals": {"building_markers": score}}
@@ -224,7 +259,7 @@ def spinning(parts):
     nowhere, and this is the signal that catches it. Returns 0.0 when
     there is nothing to measure.
     """
-    from bee_fetcher import _is_substantive
+    from .bee_fetcher import _is_substantive
 
     turns = [t for _, t in parts if _is_substantive(t)]
     n = len(turns)
@@ -233,13 +268,14 @@ def spinning(parts):
     signals = {}
     q_idx = [i for i, t in enumerate(turns) if t.rstrip().endswith("?")]
     if q_idx:
-        chained = sum(1 for i in q_idx
-                      if i + 1 < n and turns[i + 1].rstrip().endswith("?"))
+        chained = sum(
+            1 for i in q_idx if i + 1 < n and turns[i + 1].rstrip().endswith("?")
+        )
         signals["question_chains"] = round(chained / len(q_idx), 3)
-    signals["absolutist"] = round(
-        sum(1 for t in turns if _has_absolutist(t)) / n, 3)
+    signals["absolutist"] = round(sum(1 for t in turns if _has_absolutist(t)) / n, 3)
     signals["circling_markers"] = round(
-        sum(1 for t in turns if _has_circling_marker(t)) / n, 3)
+        sum(1 for t in turns if _has_circling_marker(t)) / n, 3
+    )
     score = round(sum(signals.values()) / len(signals), 3)
     return {"score": score, "signals": signals}
 
@@ -252,7 +288,7 @@ def novelty(parts):
     ``parts`` is [(speaker, text)]; non-substantive turns are skipped via
     the shared substantive filter in bee_fetcher.
     """
-    from bee_fetcher import _is_substantive
+    from .bee_fetcher import _is_substantive
 
     turns = [t for _, t in parts if _is_substantive(t)]
     if len(turns) < 2:
@@ -261,7 +297,7 @@ def novelty(parts):
     scores = []
     for idx, text in enumerate(turns):
         words = _words(text)
-        grams = {" ".join(words[i:i + 3]) for i in range(len(words) - 2)}
+        grams = {" ".join(words[i : i + 3]) for i in range(len(words) - 2)}
         if not grams:
             continue
         if idx > 0:
@@ -285,7 +321,7 @@ def forward_motion(parts):
     nowhere, and the discount is what pulls it back down. Returns None
     when there is nothing substantive to measure.
     """
-    from bee_fetcher import _is_substantive
+    from .bee_fetcher import _is_substantive
 
     substantive = [t for _, t in parts if _is_substantive(t)]
     if not substantive:
@@ -327,11 +363,11 @@ def _norm_ts(value):
         v = float(value)
     except (TypeError, ValueError):
         return None
-    if v > 1e13:      # microseconds
+    if v > 1e13:  # microseconds
         v /= 1000.0
-    elif v > 1e11:    # already milliseconds
+    elif v > 1e11:  # already milliseconds
         pass
-    elif v > 1e8:     # seconds
+    elif v > 1e8:  # seconds
         v *= 1000.0
     else:
         return None
@@ -347,10 +383,13 @@ def temporal_energy(events):
     timestamped utterances exist - then the temporal domain simply
     doesn't participate in the blend.
     """
-    from bee_fetcher import _is_substantive
+    from .bee_fetcher import _is_substantive
 
-    seq = [(s, t, _norm_ts(ts)) for s, t, ts in events
-           if t and _is_substantive(t) and _norm_ts(ts) is not None]
+    seq = [
+        (s, t, _norm_ts(ts))
+        for s, t, ts in events
+        if t and _is_substantive(t) and _norm_ts(ts) is not None
+    ]
     if len(seq) < 2:
         return None
 

@@ -5,10 +5,8 @@ same contract as ``bee_fetcher``:
 
 * live mode -- the ``bee`` binary is on PATH and authenticated
   (``bee me --json`` succeeds). Real payloads are returned as parsed JSON.
-* mock mode -- forced with ``BEEX_MOCK=1``, or used automatically when the
-  CLI is missing or not logged in. Returns clearly-labelled mock payloads
-  with the same shape as the real API, so reports, agents, and demos keep
-  working offline.
+* mock mode -- explicitly enabled with ``BEEPLEX_DEMO=1`` or ``BEEX_MOCK=1``.
+  Returns clearly-labelled sample payloads for offline use.
 
 This layer is deliberately READ-ONLY (user's standing call, 2026-09-23):
 no ``facts create/update/delete``, no ``todos create/complete/...``.
@@ -19,53 +17,27 @@ note in the integration concept.
 Payload shapes follow the official bee-skill docs (bee-computer/bee-skill):
 verbatim utterances are authoritative; AI summaries may contain minor
 inaccuracies. Each function returns the parsed ``--json`` payload (dict),
-or None when the live CLI call fails outside mock mode.
+and raises BeeError when the live CLI command fails.
 
 Mock payloads are derived from a small set of scripted mock conversations
 so every source tells a coherent story in mock mode.
 """
 
-import os
 import time
 
-from bee_fetcher import (
+from .bee_fetcher import (
     BEE_CMD,  # noqa: F401  (re-exported: override the CLI binary)
     DEFAULT_TIMEOUT,
     MOCK_FORCED,
     _run_bee,
-    cli_available,
-    is_authenticated,
 )
-
-# --- mode handling (mirrors bee_fetcher, with a cached auth check) ---
-
-_AUTH_OK = None
-
-
-def _reset_auth_cache():
-    """Forget the cached live/mocked decision (tests only)."""
-    global _AUTH_OK
-    _AUTH_OK = None
-
-
-def assume_live():
-    """Mark the CLI as available and authenticated.
-
-    For callers (like bee_fetcher) that already ran their own auth check
-    and would otherwise pay for a redundant `bee me` on first use.
-    """
-    global _AUTH_OK
-    _AUTH_OK = True
 
 
 def _live():
     """True when we should call the real CLI (not mock)."""
-    global _AUTH_OK
-    if MOCK_FORCED:
-        return False
-    if _AUTH_OK is None:
-        _AUTH_OK = cli_available() and is_authenticated()
-    return _AUTH_OK
+    # Let each command report its own error. Never cache failed auth in a
+    # long-running server or silently substitute demo memories.
+    return not MOCK_FORCED
 
 
 def _get(*args, mock):
@@ -147,7 +119,16 @@ def _mock_conv_summaries():
 
 def now():
     """Conversations from the last 10 hours, with full verbatim utterances."""
-    return _get("now", mock=lambda: {"conversations": _mock_conversations()})
+    return _get(
+        "now",
+        mock=lambda: {
+            "conversations": [
+                c
+                for c in _mock_conversations()
+                if _NOW_MS() - c["start_time"] <= 10 * _HOUR
+            ]
+        },
+    )
 
 
 def today(context=False):
@@ -175,16 +156,14 @@ def today(context=False):
 def activity(limit=20):
     """Unified recent feed across conversations, summaries, notes, todos."""
     return _get(
-        "activity", "--limit", str(limit),
+        "activity",
+        "--limit",
+        str(limit),
         mock=lambda: {
             "items": [
-                {"type": "conversation", **s}
-                for s in _mock_conv_summaries()[:limit]
+                {"type": "conversation", **s} for s in _mock_conv_summaries()[:limit]
             ]
-            + [
-                {"type": "todo", **t}
-                for t in _mock_todos()[: max(0, limit - 2)]
-            ],
+            + [{"type": "todo", **t} for t in _mock_todos()[: max(0, limit - 2)]],
         },
     )
 
@@ -192,8 +171,16 @@ def activity(limit=20):
 # --- search --------------------------------------------------------------
 
 
-def search(query, neural=False, filter="all", scope=None, sort="relevance",
-           since=None, until=None, limit=10):
+def search(
+    query,
+    neural=False,
+    filter="all",
+    scope=None,
+    sort="relevance",
+    since=None,
+    until=None,
+    limit=10,
+):
     """Server-side search. Keyword (BM25) by default; neural=True for
     semantic/vector search over conversations only.
 
@@ -215,14 +202,23 @@ def search(query, neural=False, filter="all", scope=None, sort="relevance",
     def _mock():
         q = query.lower()
         hits = [
-            c for c in _mock_conversations()
-            if q in c["title"].lower() or q in c["summary"].lower()
+            c
+            for c in _mock_conversations()
+            if q in c["title"].lower()
+            or q in c["summary"].lower()
             or any(q in u["text"].lower() for u in c["utterances"])
         ]
+        hits = [
+            c
+            for c in hits
+            if (since is None or c["start_time"] >= int(since))
+            and (until is None or c["start_time"] <= int(until))
+        ][:limit]
         return {
             "query": query,
-            "mode": "neural" if neural else "keyword",
-            "results": _mock_conv_summaries() if not q else [
+            "mode": "keyword",
+            "note": "Demo search uses keyword matching, including when semantic search is requested.",
+            "results": [
                 {k: c[k] for k in ("id", "title", "summary", "start_time", "state")}
                 for c in hits
             ],
@@ -237,12 +233,13 @@ def search(query, neural=False, filter="all", scope=None, sort="relevance",
 def conversation_transcript(conv_id):
     """Just the verbatim utterance transcript for one conversation."""
     return _get(
-        "conversations", "transcript", str(conv_id),
+        "conversations",
+        "transcript",
+        str(conv_id),
         mock=lambda: {
             "id": conv_id,
             "utterances": next(
-                (c["utterances"] for c in _mock_conversations()
-                 if c["id"] == conv_id),
+                (c["utterances"] for c in _mock_conversations() if c["id"] == conv_id),
                 [],
             ),
         },
@@ -252,13 +249,16 @@ def conversation_transcript(conv_id):
 def conversations_related(conv_id, limit=10):
     """Conversations similar to the given one (a topic thread)."""
     return _get(
-        "conversations", "related", str(conv_id), "--limit", str(limit),
+        "conversations",
+        "related",
+        str(conv_id),
+        "--limit",
+        str(limit),
         mock=lambda: {
             "id": conv_id,
-            "related": [
-                s for s in _mock_conv_summaries()
-                if s["id"] != conv_id
-            ][:limit],
+            "related": [s for s in _mock_conv_summaries() if s["id"] != conv_id][
+                :limit
+            ],
         },
     )
 
@@ -296,20 +296,20 @@ def daily_list(limit=10, cursor=None):
 def daily_get(daily_id):
     """One daily summary by id."""
     return _get(
-        "daily", "get", str(daily_id),
-        mock=lambda: next(
-            (d for d in _mock_daily() if d["id"] == daily_id), None
-        ),
+        "daily",
+        "get",
+        str(daily_id),
+        mock=lambda: next((d for d in _mock_daily() if d["id"] == daily_id), None),
     )
 
 
 def daily_find(date_str):
     """Look up the daily summary for a YYYY-MM-DD date."""
     return _get(
-        "daily", "find", date_str,
-        mock=lambda: next(
-            (d for d in _mock_daily() if d["date"] == date_str), None
-        ),
+        "daily",
+        "find",
+        date_str,
+        mock=lambda: next((d for d in _mock_daily() if d["date"] == date_str), None),
     )
 
 
@@ -348,12 +348,16 @@ def journals_list(limit=10, cursor=None):
 def journals_search(query, limit=10):
     """Find a voice memo by content."""
     return _get(
-        "journals", "search", "--query", query, "--limit", str(limit),
+        "journals",
+        "search",
+        "--query",
+        query,
+        "--limit",
+        str(limit),
         mock=lambda: {
             "query": query,
             "journals": [
-                j for j in _mock_journals()
-                if query.lower() in j["text"].lower()
+                j for j in _mock_journals() if query.lower() in j["text"].lower()
             ][:limit],
         },
     )
@@ -362,10 +366,10 @@ def journals_search(query, limit=10):
 def journals_get(journal_id):
     """Full transcribed text of one voice memo."""
     return _get(
-        "journals", "get", str(journal_id),
-        mock=lambda: next(
-            (j for j in _mock_journals() if j["id"] == journal_id), None
-        ),
+        "journals",
+        "get",
+        str(journal_id),
+        mock=lambda: next((j for j in _mock_journals() if j["id"] == journal_id), None),
     )
 
 
@@ -378,13 +382,13 @@ def _mock_insights():
             "id": "mock-insight-1",
             "title": "[MOCK] Thursday planning pattern",
             "text": "[MOCK] Your Thursday conversations run 40% longer and "
-                    "circle back to timelines twice on average.",
+            "circle back to timelines twice on average.",
         },
         {
             "id": "mock-insight-2",
             "title": "[MOCK] Quiet mornings",
             "text": "[MOCK] You speak least before 9am; your longest turns "
-                    "happen after lunch.",
+            "happen after lunch.",
         },
     ]
 
@@ -392,7 +396,10 @@ def _mock_insights():
 def insights_list(limit=50):
     """AI-generated patterns and observations about the owner."""
     return _get(
-        "insights", "list", "--limit", str(limit),
+        "insights",
+        "list",
+        "--limit",
+        str(limit),
         mock=lambda: {"insights": _mock_insights()[:limit]},
     )
 
@@ -400,10 +407,10 @@ def insights_list(limit=50):
 def insights_get(insight_id):
     """One insight by id."""
     return _get(
-        "insights", "get", str(insight_id),
-        mock=lambda: next(
-            (i for i in _mock_insights() if i["id"] == insight_id), None
-        ),
+        "insights",
+        "get",
+        str(insight_id),
+        mock=lambda: next((i for i in _mock_insights() if i["id"] == insight_id), None),
     )
 
 
@@ -446,7 +453,8 @@ def locations_clusters(limit=20, min_visits=None, visits=False):
         *args,
         mock=lambda: {
             "clusters": [
-                p for p in _mock_places()
+                p
+                for p in _mock_places()
                 if min_visits is None or p["visits"] >= min_visits
             ][:limit],
         },
@@ -456,7 +464,8 @@ def locations_clusters(limit=20, min_visits=None, visits=False):
 def locations_current():
     """Latest known location."""
     return _get(
-        "locations", "current",
+        "locations",
+        "current",
         mock=lambda: {"place": "[MOCK] Home", "timestamp": _NOW_MS()},
     )
 
@@ -495,10 +504,9 @@ def facts_list(limit=10, cursor=None, unconfirmed=False):
     return _get(
         *args,
         mock=lambda: {
-            "facts": [
-                f for f in _mock_facts()
-                if unconfirmed or f["confirmed"]
-            ][:limit],
+            "facts": [f for f in _mock_facts() if unconfirmed or f["confirmed"]][
+                :limit
+            ],
             "next_cursor": None,
         },
     )
@@ -507,23 +515,27 @@ def facts_list(limit=10, cursor=None, unconfirmed=False):
 def facts_get(fact_id):
     """One fact by id."""
     return _get(
-        "facts", "get", str(fact_id),
-        mock=lambda: next(
-            (f for f in _mock_facts() if f["id"] == fact_id), None
-        ),
+        "facts",
+        "get",
+        str(fact_id),
+        mock=lambda: next((f for f in _mock_facts() if f["id"] == fact_id), None),
     )
 
 
 def facts_search(query, limit=10):
     """Find facts by content."""
     return _get(
-        "facts", "search", "--query", query, "--limit", str(limit),
+        "facts",
+        "search",
+        "--query",
+        query,
+        "--limit",
+        str(limit),
         mock=lambda: {
             "query": query,
-            "facts": [
-                f for f in _mock_facts()
-                if query.lower() in f["text"].lower()
-            ][:limit],
+            "facts": [f for f in _mock_facts() if query.lower() in f["text"].lower()][
+                :limit
+            ],
         },
     )
 
@@ -561,26 +573,47 @@ def todos_list(limit=10, cursor=None):
     args = ["todos", "list", "--limit", str(limit)]
     if cursor:
         args += ["--cursor", cursor]
+
+    def demo_page():
+        try:
+            offset = int(cursor or 0)
+            if offset < 0:
+                raise ValueError
+        except ValueError:
+            from .client import BeeError
+
+            raise BeeError(
+                "Invalid demo cursor. Use next_cursor from the previous response."
+            ) from None
+        items = _mock_todos()
+        return {
+            "todos": items[offset : offset + limit],
+            "next_cursor": str(offset + limit) if offset + limit < len(items) else None,
+        }
+
     return _get(
         *args,
-        mock=lambda: {"todos": _mock_todos()[:limit], "next_cursor": None},
+        mock=demo_page,
     )
 
 
 def todos_get(todo_id):
     """One todo by id."""
     return _get(
-        "todos", "get", str(todo_id),
-        mock=lambda: next(
-            (t for t in _mock_todos() if t["id"] == todo_id), None
-        ),
+        "todos",
+        "get",
+        str(todo_id),
+        mock=lambda: next((t for t in _mock_todos() if t["id"] == todo_id), None),
     )
 
 
 def todos_suggestions(limit=50):
     """Todos Bee proposed from conversations, not yet accepted."""
     return _get(
-        "todos", "suggestions", "--limit", str(limit),
+        "todos",
+        "suggestions",
+        "--limit",
+        str(limit),
         mock=lambda: {"suggestions": _mock_suggestions()[:limit]},
     )
 
@@ -610,14 +643,28 @@ def changed(cursor=None):
 
 # Explicit read-only surface: anything not listed here is not wrapped.
 __all__ = [
-    "now", "today", "activity",
+    "now",
+    "today",
+    "activity",
     "search",
-    "conversation_transcript", "conversations_related",
-    "daily_list", "daily_get", "daily_find",
-    "journals_list", "journals_search", "journals_get",
-    "insights_list", "insights_get",
-    "locations_recent", "locations_clusters", "locations_current",
-    "facts_list", "facts_get", "facts_search",
-    "todos_list", "todos_get", "todos_suggestions",
+    "conversation_transcript",
+    "conversations_related",
+    "daily_list",
+    "daily_get",
+    "daily_find",
+    "journals_list",
+    "journals_search",
+    "journals_get",
+    "insights_list",
+    "insights_get",
+    "locations_recent",
+    "locations_clusters",
+    "locations_current",
+    "facts_list",
+    "facts_get",
+    "facts_search",
+    "todos_list",
+    "todos_get",
+    "todos_suggestions",
     "changed",
 ]

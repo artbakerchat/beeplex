@@ -1,20 +1,15 @@
 """Bee CLI integration for beeplex.
 
 Fetches real conversation data from the Bee wearable via the official Bee CLI
-(``npm install -g @beeai/cli``) and maps it onto the report schema consumed by
-``family.py``.
+(``npm install -g @beeai/cli``) and maps it onto the Office report schema.
 
 Two modes:
 
 * ``live`` - the ``bee`` binary is on PATH and authenticated
   (``bee me --json`` succeeds). Real transcripts are fetched.
-* ``mock`` - forced with ``BEEX_MOCK=1``, or used automatically when the CLI
-  is missing or not logged in. Returns clearly-labelled sample data so the
-  reports (and the hackathon demo) still run offline.
-
-Hackathon note: the repo "actually calls Bee's technology in code" right here -
-``subprocess`` calls to the official Bee CLI (an import of nothing and a
-README mention would not count).
+* ``mock`` - explicitly enabled with ``BEEPLEX_DEMO=1`` (or ``BEEX_MOCK=1``).
+  Sample conversations are shared with the MCP browsing tools. Live failures
+  raise actionable errors; they never switch to demo data.
 
 Privacy: Bee data is end-to-end encrypted and belongs to the owner. This
 module only ever reads it through the owner's own authenticated CLI and never
@@ -22,17 +17,17 @@ writes transcripts to the repo - fetched data goes straight into the generated
 reports in memory.
 """
 
-import json
 import os
-import shutil
-import subprocess
 from datetime import datetime, timezone
 
-from llm_scoring import llm_engagement, llm_engagement_batch
-from temporal_scoring import effective_words, temporal_scores
+from .llm_scoring import llm_engagement, llm_engagement_batch
+from .temporal_scoring import effective_words, temporal_scores
+
+from .client import BeeError, command, run
+from .config import DEMO
 
 BEE_CMD = os.environ.get("BEE_CLI", "bee")
-MOCK_FORCED = os.environ.get("BEEX_MOCK") == "1"
+MOCK_FORCED = DEMO
 DEFAULT_TIMEOUT = 60
 
 # Sentinel for "LLM result not pre-fetched": _engagement_cells falls back to a
@@ -42,7 +37,7 @@ DEFAULT_TIMEOUT = 60
 # one-call-per-row retries.
 _LLM_NOT_FETCHED = object()
 
-# Schema keys consumed by family.py (docx / xlsx / pptx builders).
+# Schema keys consumed by beeplex.reports (docx / xlsx / pptx builders).
 SCHEMA = [
     "Recording_Date",
     "Session_Title",
@@ -58,33 +53,25 @@ SCHEMA = [
 
 def cli_available():
     """True when the `bee` binary is on PATH."""
-    return shutil.which(BEE_CMD) is not None
+    try:
+        command()
+        return True
+    except BeeError:
+        return False
 
 
 def _run_bee(*args, timeout=DEFAULT_TIMEOUT):
-    """Run `bee <args> --json` and return parsed JSON, or None on any failure."""
-    if not cli_available():
-        return None
-    cmd = [BEE_CMD, *args]
-    if "--json" not in cmd:
-        cmd.append("--json")
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
-        )
-    except (subprocess.SubprocessError, OSError):
-        return None
-    if proc.returncode != 0:
-        return None
-    try:
-        return json.loads(proc.stdout)
-    except (json.JSONDecodeError, ValueError):
-        return None
+    """Run a read command; failures are explicit and never fabricated data."""
+    return run(*args, timeout=timeout)
 
 
 def is_authenticated():
     """True when the CLI has a working Bee login."""
-    return _run_bee("me") is not None
+    try:
+        _run_bee("me", timeout=10)
+        return True
+    except BeeError:
+        return False
 
 
 def list_conversations(limit=10):
@@ -115,11 +102,7 @@ def _conv_id(conv):
 def _recording_date(conv):
     """Parse the conversation's start time into a date (the actual Bee
     recording date), or None when unavailable."""
-    raw = (
-        conv.get("start_time")
-        or conv.get("started_at")
-        or conv.get("created_at")
-    )
+    raw = conv.get("start_time") or conv.get("started_at") or conv.get("created_at")
     if raw is None:
         return None
     if isinstance(raw, (int, float)):
@@ -128,10 +111,16 @@ def _recording_date(conv):
         return datetime.fromtimestamp(epoch, tz=timezone.utc).date()
     if isinstance(raw, str):
         text = raw.strip()
-        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S",
-                    "%Y-%m-%d"):
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d",
+        ):
             try:
-                return datetime.strptime(text[: len(fmt)] if len(text) > len(fmt) else text, fmt).date()
+                return datetime.strptime(
+                    text[: len(fmt)] if len(text) > len(fmt) else text, fmt
+                ).date()
             except ValueError:
                 continue
         try:
@@ -192,24 +181,50 @@ def _utterance_events(conv):
                     text = str(u[key]).strip()
                     if text:
                         ts = None
-                        for tkey in ("timestamp", "start_time", "startTime",
-                                     "ts", "time", "t"):
+                        for tkey in (
+                            "timestamp",
+                            "start_time",
+                            "startTime",
+                            "ts",
+                            "time",
+                            "t",
+                        ):
                             if u.get(tkey) is not None:
                                 ts = u.get(tkey)
                                 break
-                        events.append(
-                            (u.get("speaker") or u.get("role"), text, ts))
+                        events.append((u.get("speaker") or u.get("role"), text, ts))
                     break
     return events
 
 
 # Words that carry no substance on their own - filtered out of the engagement
 # signals so "yeah / uh-huh / ok" ping-pong can't fake a lively conversation.
-BACKCHANNELS = frozenset({
-    "yeah", "yep", "yes", "no", "nope", "ok", "okay", "mm", "mhm", "mm-hm",
-    "uh-huh", "uh", "um", "hmm", "right", "sure", "thanks", "thank you",
-    "bye", "hi", "hello", "hey",
-})
+BACKCHANNELS = frozenset(
+    {
+        "yeah",
+        "yep",
+        "yes",
+        "no",
+        "nope",
+        "ok",
+        "okay",
+        "mm",
+        "mhm",
+        "mm-hm",
+        "uh-huh",
+        "uh",
+        "um",
+        "hmm",
+        "right",
+        "sure",
+        "thanks",
+        "thank you",
+        "bye",
+        "hi",
+        "hello",
+        "hey",
+    }
+)
 
 
 def _is_substantive(text):
@@ -305,9 +320,16 @@ def score_breakdown(parts, events, llm=_LLM_NOT_FETCHED):
     coaching dashboard from it. Empty transcript -> everything None.
     """
     if not parts:
-        return {"det": None, "energy": None, "fm": None, "llm": None,
-                "engagement": None, "fm_blended": None,
-                "n_substantive": 0, "speaker_shares": None}
+        return {
+            "det": None,
+            "energy": None,
+            "fm": None,
+            "llm": None,
+            "engagement": None,
+            "fm_blended": None,
+            "n_substantive": 0,
+            "speaker_shares": None,
+        }
     if llm is _LLM_NOT_FETCHED:
         llm = llm_engagement(parts)
     det = engagement_signals(parts)
@@ -322,9 +344,12 @@ def score_breakdown(parts, events, llm=_LLM_NOT_FETCHED):
     if llm_eng is not None:
         domains.append(llm_eng)
     eng_score = round(sum(domains) / len(domains), 1)
-    engagement = {"score": eng_score,
-                  "label": "High" if eng_score >= 7
-                  else ("Moderate" if eng_score >= 4 else "Low")}
+    engagement = {
+        "score": eng_score,
+        "label": "High"
+        if eng_score >= 7
+        else ("Moderate" if eng_score >= 4 else "Low"),
+    }
 
     fm_domains = []
     if fm is not None:
@@ -335,15 +360,24 @@ def score_breakdown(parts, events, llm=_LLM_NOT_FETCHED):
     fm_blended = None
     if fm_domains:
         s = round(sum(fm_domains) / len(fm_domains), 1)
-        fm_blended = {"score": s,
-                      "label": "High" if s >= 7
-                      else ("Moderate" if s >= 4 else "Low")}
+        fm_blended = {
+            "score": s,
+            "label": "High" if s >= 7 else ("Moderate" if s >= 4 else "Low"),
+        }
 
     llm_out = None
     if llm:
-        llm_out = {k: llm.get(k) for k in ("engagement", "rationale", "tone",
-                                           "tone_label", "progress",
-                                           "progress_label")}
+        llm_out = {
+            k: llm.get(k)
+            for k in (
+                "engagement",
+                "rationale",
+                "tone",
+                "tone_label",
+                "progress",
+                "progress_label",
+            )
+        }
 
     substantive = [(s, t) for s, t in parts if _is_substantive(t)]
     shares = None
@@ -354,17 +388,31 @@ def score_breakdown(parts, events, llm=_LLM_NOT_FETCHED):
             if s:
                 counts[s] = counts.get(s, 0) + len(t.split())
         total = sum(counts.values()) or 1
-        shares = {s: round(c / total, 3)
-                  for s, c in sorted(counts.items(), key=lambda kv: -kv[1])}
+        shares = {
+            s: round(c / total, 3)
+            for s, c in sorted(counts.items(), key=lambda kv: -kv[1])
+        }
 
     return {
-        "det": {"score": det["score"], "label": det["label"],
-                "signals": det["signals"]},
-        "energy": ({"score": energy["score"], "label": energy["label"],
-                    "signals": energy["signals"]} if energy is not None
-                   else None),
-        "fm": ({"score": fm["score"], "label": fm["label"],
-                "signals": fm["signals"]} if fm is not None else None),
+        "det": {
+            "score": det["score"],
+            "label": det["label"],
+            "signals": det["signals"],
+        },
+        "energy": (
+            {
+                "score": energy["score"],
+                "label": energy["label"],
+                "signals": energy["signals"],
+            }
+            if energy is not None
+            else None
+        ),
+        "fm": (
+            {"score": fm["score"], "label": fm["label"], "signals": fm["signals"]}
+            if fm is not None
+            else None
+        ),
         "llm": llm_out,
         "engagement": engagement,
         "fm_blended": fm_blended,
@@ -429,7 +477,7 @@ def _resolve_source(conv):
 
 
 def _row_from_source(source, parts, events, llm=_LLM_NOT_FETCHED, conv_id=None):
-    """Map a resolved conversation payload onto the family.py report schema."""
+    """Map a resolved conversation payload onto the beeplex.reports report schema."""
     title = (
         source.get("title")
         or source.get("name")
@@ -448,10 +496,11 @@ def _row_from_source(source, parts, events, llm=_LLM_NOT_FETCHED, conv_id=None):
     key_topic = (summary[:60] + "...") if len(summary) > 60 else (summary or "—")
 
     engagement_cell, tone_cell, forward_motion_cell = _engagement_cells(
-        parts, events, llm)
+        parts, events, llm
+    )
 
     return {
-        # The actual Bee recording date - wired into report titles by family.py.
+        # The actual Bee recording date - wired into report titles by beeplex.reports.
         "Recording_Date": _recording_date(source),
         "Session_Title": str(title)[:80],
         "Source_Transcript_Snippet": snippet,
@@ -467,7 +516,7 @@ def _row_from_source(source, parts, events, llm=_LLM_NOT_FETCHED, conv_id=None):
 
 
 def conversation_to_row(conv, llm=_LLM_NOT_FETCHED):
-    """Map one conversation payload onto the family.py report schema.
+    """Map one conversation payload onto the beeplex.reports report schema.
 
     Convenience wrapper: resolves the full conversation, then builds the
     row. ``llm`` is a pre-fetched llm_engagement() result (or None); when
@@ -479,74 +528,48 @@ def conversation_to_row(conv, llm=_LLM_NOT_FETCHED):
 
 
 def mock_rows():
-    """Sample data used when the Bee CLI is unavailable (demo / CI / offline)."""
-    from datetime import date
+    """Score the same sample conversations used by browsing and search."""
+    from .bee_sources import _mock_conversations
 
-    today = date.today()
     return [
-        {
-            "Recording_Date": today,
-            "Session_Title": "Product Strategy Sync [MOCK]",
-            "Source_Transcript_Snippet": "...we need to finalize the Q3 roadmap by Friday and assign module owners...",
-            "Key_Topic": "Roadmap Deadlines",
-            "Tone_Rating": "7/10 (Moderate Positive)",
-            "Engagement_Level": "High",
-            "Forward_Motion": "—",
-            "Action_Items": "Finalize Q3 roadmap by Friday; assign module owners.",
-            "Summary_Notes": "Team aligned on core priorities and established strict delivery milestones.",
-        },
-        {
-            "Recording_Date": today,
-            "Session_Title": "Client Feedback Review [MOCK]",
-            "Source_Transcript_Snippet": "...the client mentioned latency issues during peak hours, need an urgent patch...",
-            "Key_Topic": "Performance Bug",
-            "Tone_Rating": "4/10 (Low / Tense)",
-            "Engagement_Level": "High",
-            "Forward_Motion": "—",
-            "Action_Items": "Deploy latency patch before Monday peak hours.",
-            "Summary_Notes": "Addressed urgent customer friction point; engineering team to investigate.",
-        },
-        {
-            "Recording_Date": today,
-            "Session_Title": "Weekly Team Catch-up [MOCK]",
-            "Source_Transcript_Snippet": "...everyone's workload looks balanced, let's keep the current sprint velocity...",
-            "Key_Topic": "Workload & Velocity",
-            "Tone_Rating": "9/10 (High Positive)",
-            "Engagement_Level": "Moderate",
-            "Forward_Motion": "—",
-            "Action_Items": "Maintain current sprint tasks; schedule next retro.",
-            "Summary_Notes": "Positive alignment; team morale is high and pacing is sustainable.",
-        },
+        _row_from_source(
+            conv,
+            _utterance_parts(conv),
+            _utterance_events(conv),
+            llm=None,
+            conv_id=conv["id"],
+        )
+        for conv in _mock_conversations()
     ]
 
 
-def fetch_report_data(limit=10):
+def fetch_report_data(limit=10, *, persist=True):
     """Fetch conversation rows for the reports.
 
     Returns (rows, info) where info describes the source:
     {"mode": "live"|"mock", "detail": ...}.
     """
     if MOCK_FORCED:
-        rows, info = mock_rows(), {
-            "mode": "mock",
-            "detail": "BEEX_MOCK=1 - forced mock data",
-        }
+        rows, info = (
+            mock_rows()[:limit],
+            {
+                "mode": "mock",
+                "detail": "Explicit demo mode - sample data only",
+            },
+        )
     elif not cli_available():
-        rows, info = mock_rows(), {
-            "mode": "mock",
-            "detail": f"'{BEE_CMD}' not found - install with: npm install -g @beeai/cli",
-        }
+        raise BeeError(
+            "Bee CLI not found. Install with npm install -g @beeai/cli, then run bee login."
+        )
     elif not is_authenticated():
-        rows, info = mock_rows(), {
-            "mode": "mock",
-            "detail": "Bee CLI not authenticated - run `bee login` (or `bee login --no-wait`)",
-        }
+        raise BeeError("Bee CLI not authenticated. Run bee login, then try again.")
     else:
-        rows, info = _fetch_live(limit)
+        rows, info = _fetch_live(limit, persist=persist)
     # Mock runs regenerate the dashboard from history (demo banner, no
     # new history entry); the live path records the run itself.
-    if info["mode"] == "mock":
-        from dashboard import record_run
+    if info["mode"] == "mock" and persist:
+        from .dashboard import record_run
+
         record_run([], info)
     return rows, info
 
@@ -556,14 +579,14 @@ def _scoring_context():
     the owner. Best-effort - returns None on any failure. (Lazy import:
     bee_sources imports this module, so it can't be imported at top.)"""
     try:
-        from llm_scoring import available
+        from .llm_scoring import available
+
         if not available():
             return None
-        import bee_sources
-        bee_sources.assume_live()  # auth already checked by our caller
+        from . import bee_sources
+
         facts = bee_sources.facts_list(limit=20) or {}
-        texts = [f.get("text", "") for f in facts.get("facts", [])
-                 if f.get("text")]
+        texts = [f.get("text", "") for f in facts.get("facts", []) if f.get("text")]
         if not texts:
             return None
         return "\n".join(f"- {t[:160]}" for t in texts[:12])
@@ -581,8 +604,7 @@ def _enrich_rows(rows, pairs):
       on the row's recording date (one lookup per distinct date).
     Best-effort: any failure leaves the rows as they were.
     """
-    import bee_sources
-    bee_sources.assume_live()  # auth already checked by our caller
+    from . import bee_sources
 
     try:
         sugg = bee_sources.todos_suggestions(limit=50) or {}
@@ -616,11 +638,11 @@ def _enrich_rows(rows, pairs):
         if summary:
             base = row.get("Summary_Notes") or ""
             row["Summary_Notes"] = (
-                (base + "\n" if base else "") + f"Day summary (Bee): {summary}"
-            )
+                base + "\n" if base else ""
+            ) + f"Day summary (Bee): {summary}"
 
 
-def _fetch_live(limit):
+def _fetch_live(limit, *, persist=True):
     """Live path of fetch_report_data: CLI list/get, batch LLM, dashboard."""
 
     conversations = list_conversations(limit=limit)
@@ -642,8 +664,10 @@ def _fetch_live(limit):
         for i, (conv_id, source, parts, events) in enumerate(prepared)
     ]
     pairs = [
-        (_row_from_source(source, parts, events, llm, conv_id),
-         (conv_id, source, parts, events, llm))
+        (
+            _row_from_source(source, parts, events, llm, conv_id),
+            (conv_id, source, parts, events, llm),
+        )
         for conv_id, source, parts, events, llm in scored
     ]
     pairs = [(row, meta) for row, meta in pairs if row["Session_Title"]]
@@ -654,23 +678,28 @@ def _fetch_live(limit):
     _enrich_rows(rows, pairs)
 
     # Coaching dashboard: append this run's scores to the local trend
-    # history and regenerate family/dashboard.html. Automatic on every
+    # history and regenerate BEEPLEX_DATA_DIR/dashboard.html. Automatic on every
     # run; mock mode regenerates the page from history without appending.
-    from dashboard import record_run
-    record_run(
-        [
-            {
-                "id": str(conv_id),
-                "title": row["Session_Title"],
-                "date": (str(row["Recording_Date"])
-                         if row.get("Recording_Date") else None),
-                "parts": parts,
-                "breakdown": score_breakdown(parts, events, llm),
-            }
-            for row, (conv_id, source, parts, events, llm) in pairs
-        ],
-        {"mode": "live"},
-    )
+    from .dashboard import record_run
+
+    if persist:
+        record_run(
+            [
+                {
+                    "id": str(conv_id),
+                    "title": row["Session_Title"],
+                    "date": (
+                        str(row["Recording_Date"])
+                        if row.get("Recording_Date")
+                        else None
+                    ),
+                    "parts": parts,
+                    "breakdown": score_breakdown(parts, events, llm),
+                }
+                for row, (conv_id, source, parts, events, llm) in pairs
+            ],
+            {"mode": "live"},
+        )
     return rows, {
         "mode": "live",
         "detail": f"{len(rows)} conversations via Bee CLI",
@@ -682,26 +711,39 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser(
         description="beeplex - Bee conversation reports (default), "
-                    "clinical encounter extraction (--clinical), or "
-                    "Bee's diary (--persona).")
-    ap.add_argument("--clinical", action="store_true",
-                    help="Clinical mode: doctor-worn Bee encounter -> "
-                         "one-page clinical summary per conversation "
-                         "(extraction only, no engagement scoring).")
-    ap.add_argument("--persona", action="store_true",
-                    help="Persona mode: Bee's diary - derive the personality "
-                         "Bee has grown from the listening history and write "
-                         "tonight's first-person entry (reading mode: never "
-                         "appends to history).")
-    ap.add_argument("--limit", type=int, default=3,
-                    help="Max conversations to process (default: 3).")
+        "clinical encounter extraction (--clinical), or "
+        "Bee's diary (--persona)."
+    )
+    ap.add_argument(
+        "--clinical",
+        action="store_true",
+        help="Clinical mode: doctor-worn Bee encounter -> "
+        "one-page clinical summary per conversation "
+        "(extraction only, no engagement scoring).",
+    )
+    ap.add_argument(
+        "--persona",
+        action="store_true",
+        help="Persona mode: Bee's diary - derive the personality "
+        "Bee has grown from the listening history and write "
+        "tonight's first-person entry (reading mode: never "
+        "appends to history).",
+    )
+    ap.add_argument(
+        "--limit",
+        type=int,
+        default=3,
+        help="Max conversations to process (default: 3).",
+    )
     args = ap.parse_args()
 
     if args.persona:
-        from bee_persona import run_persona
+        from .bee_persona import run_persona
+
         run_persona(limit=args.limit)
     elif args.clinical:
-        from clinical_extraction import run_clinical
+        from .clinical_extraction import run_clinical
+
         run_clinical(limit=args.limit)
     else:
         rows, info = fetch_report_data(limit=args.limit)

@@ -16,3 +16,17 @@ __pycache__/
 # my-agent subfolder: heavy but regenerable, never commit
 my-agent/.venv/
 my-agent/ui/components/conversation_cards/frontend/node_modules/
+
+# Local development and packaging
+.tools/
+uv-bootstrap.zip
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+/dist/
+/build/
+node_modules/
+
+# Optional local MCP output
+data/
+.beeplex/

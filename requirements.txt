@@ -1,6 +1,2 @@
-pandas
-openpyxl
-python-docx
-python-pptx
-boto3  # AWS Bedrock Nova fallback for the LLM scoring layer
-python-dotenv  # optional: auto-loads GEMINI_API_KEY from a .env file
+# Compatibility shortcut; pyproject.toml is the dependency source of truth.
+.[reports]

@@ -162,7 +162,7 @@ def _fake_daily(convs):
 
 def main(argv):
     args = [a for a in argv if a != "--json"]
-    if os.environ.get("SIM_BEE_FAIL_AUTH") == "1" and args[:1] == ["me"]:
+    if os.environ.get("SIM_BEE_FAIL_AUTH") == "1":
         sys.stderr.write("sim-bee: not logged in (SIM_BEE_FAIL_AUTH=1)\n")
         return 1
 
@@ -176,11 +176,13 @@ def main(argv):
         limit = 10
         if "--limit" in args:
             limit = int(args[args.index("--limit") + 1])
+        offset = int(_flag(args, "--cursor", 0))
         items = [
             {k: c[k] for k in ("id", "title", "summary", "start_time")}
-            for c in convs[:limit]
+            for c in convs[offset:offset + limit]
         ]
-        print(json.dumps({"conversations": items, "next_cursor": None}))
+        next_cursor = str(offset + limit) if offset + limit < len(convs) else None
+        print(json.dumps({"conversations": items, "next_cursor": next_cursor}))
         return 0
 
     if args[:2] == ["conversations", "get"] and len(args) > 2:

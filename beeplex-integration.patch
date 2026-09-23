@@ -1,0 +1,2257 @@
+diff --git a/README.md b/README.md
+index f009109..624c894 100644
+--- a/README.md
++++ b/README.md
+@@ -60,6 +60,19 @@ clearly-labelled `[MOCK]` sample data so the reports still build.
+ Env vars: `BEEX_MOCK=1` forces mock mode; `BEE_CLI` overrides the `bee`
+ binary path.
+ 
++### Read-only data sources (`bee_sources.py`)
++
++The plumbing layer: thin wrappers over the CLI's other *read* commands —
++`now`, `today`, `activity`, `search` (keyword + `--neural`), `conversations
++transcript`/`related`, `daily`, `journals`, `insights`, `locations`, `facts`,
++`todos` (incl. suggestions), and the `changed` changefeed. Same live/mock
++contract as `bee_fetcher` (mock payloads are `[MOCK]`-labelled and shaped
++like the real API). Deliberately **read-only**: no fact/todo
++create/update/delete — beeplex observes and scores, never modifies the
++owner's Bee state. The simulator's fake `bee` emulates all of these, so
++`PATH="simulator:$PATH" python3 -c "import bee_sources"` exercises the live
++path offline.
++
+ ## LLM layer (optional)
+ 
+ `llm_scoring.py` scores all of a run's transcripts in a single LLM call:
+@@ -214,12 +227,35 @@ pollen; never nags, never therapy-speak; and honest about not knowing —
+ it hears words, not faces, so "you went quiet, I don't know why" beats
+ an invented reason.
+ 
++## User profile (`profile.py`)
++
++Bee's own read of *who you are*, maintained as a living document. Each
++run gathers only what's new — conversations via the `changed` changefeed
++(cursor persisted only after successful processing, so a failed batch
++retries), plus fresh facts, insights, journals, and frequent places —
++then re-renders `family/user.md`: relationships (speakers across
++conversations), work/projects, interests (from Bee's own insights,
++attributed), preferences (from confirmed facts), places, dated events,
++and notes. Unconfirmed facts are always flagged as Bee's inference, not
++truth. Deterministic extraction always runs; with an LLM configured, one
++extra call per run proposes candidate updates as JSON, merged
++defensively.
++
++    python3 profile.py            # incremental update
++    python3 profile.py --full     # rebuild from scratch
++
++Local and gitignored like everything in `family/` — a user profile is
++personal data, never committed.
++
+ ## Simulator (no device needed)
+ 
+ `simulator/` is a fake `bee` CLI so you can test the real live path without
+-hardware or a login. It emulates `bee me`, `conversations list/get/transcript`
+-with scripted conversations (`simulator/conversations.json`) shaped like the
+-documented Bee payloads — verbatim utterances with speaker and timestamps.
++hardware or a login. It emulates `bee me`, `conversations list/get/transcript/related`,
++`now`, `today`, `activity`, `search` (keyword + neural), `daily`,
++`journals`, `insights`, `locations`, `facts`, `todos` (+ suggestions),
++and `changed` with scripted conversations (`simulator/conversations.json`)
++shaped like the documented Bee payloads — verbatim utterances with speaker
++and timestamps.
+ 
+ Run the whole pipeline against it:
+ 
+diff --git a/bee_fetcher.py b/bee_fetcher.py
+index 55dacec..c39a6b2 100644
+--- a/bee_fetcher.py
++++ b/bee_fetcher.py
+@@ -459,8 +459,8 @@ def _row_from_source(source, parts, events, llm=_LLM_NOT_FETCHED, conv_id=None):
+         "Tone_Rating": tone_cell,
+         "Engagement_Level": engagement_cell,
+         "Forward_Motion": forward_motion_cell,
+-        # Per-conversation action items are not exposed by the CLI; the global
+-        # `bee todos suggestions` feed can be mined separately.
++        # Action_Items starts empty; _enrich_rows() fills it from
++        # `bee todos suggestions` (Bee's own suggestions, verbatim).
+         "Action_Items": "",
+         "Summary_Notes": summary,
+     }
+@@ -551,6 +551,75 @@ def fetch_report_data(limit=10):
+     return rows, info
+ 
+ 
++def _scoring_context():
++    """Background for the LLM scoring prompt: Bee's confirmed facts about
++    the owner. Best-effort - returns None on any failure. (Lazy import:
++    bee_sources imports this module, so it can't be imported at top.)"""
++    try:
++        from llm_scoring import available
++        if not available():
++            return None
++        import bee_sources
++        bee_sources.assume_live()  # auth already checked by our caller
++        facts = bee_sources.facts_list(limit=20) or {}
++        texts = [f.get("text", "") for f in facts.get("facts", [])
++                 if f.get("text")]
++        if not texts:
++            return None
++        return "\n".join(f"- {t[:160]}" for t in texts[:12])
++    except Exception:
++        return None
++
++
++def _enrich_rows(rows, pairs):
++    """Enrich report rows with Bee's own read surfaces (the second reader).
++
++    - Action_Items: Bee's suggested todos for each conversation, verbatim
++      and attributed, via `bee todos suggestions` (matched on
++      conversation_id).
++    - Summary_Notes: the day's own summary appended, via `bee daily find`
++      on the row's recording date (one lookup per distinct date).
++    Best-effort: any failure leaves the rows as they were.
++    """
++    import bee_sources
++    bee_sources.assume_live()  # auth already checked by our caller
++
++    try:
++        sugg = bee_sources.todos_suggestions(limit=50) or {}
++        by_conv = {}
++        for s in sugg.get("suggestions", []):
++            cid = s.get("conversation_id")
++            text = (s.get("text") or "").strip()
++            if cid and text:
++                by_conv.setdefault(str(cid), []).append(text)
++    except Exception:
++        by_conv = {}
++
++    daily_cache = {}
++
++    def day_summary(rec_date):
++        if not rec_date:
++            return None
++        key = str(rec_date)
++        if key not in daily_cache:
++            try:
++                daily_cache[key] = (bee_sources.daily_find(key) or {}).get("summary")
++            except Exception:
++                daily_cache[key] = None
++        return daily_cache[key]
++
++    for row, (conv_id, _source, _parts, _events, _llm) in pairs:
++        texts = by_conv.get(str(conv_id)) if conv_id is not None else None
++        if texts:
++            row["Action_Items"] = "; ".join(f"Bee suggests: {t}" for t in texts)
++        summary = day_summary(row.get("Recording_Date"))
++        if summary:
++            base = row.get("Summary_Notes") or ""
++            row["Summary_Notes"] = (
++                (base + "\n" if base else "") + f"Day summary (Bee): {summary}"
++            )
++
++
+ def _fetch_live(limit):
+     """Live path of fetch_report_data: CLI list/get, batch LLM, dashboard."""
+ 
+@@ -565,7 +634,8 @@ def _fetch_live(limit):
+         source, parts, events = _resolve_source(conv)
+         prepared.append((conv_id, source, parts, events))
+     llm_map = llm_engagement_batch(
+-        [(str(i), parts) for i, (_, _, parts, _) in enumerate(prepared)]
++        [(str(i), parts) for i, (_, _, parts, _) in enumerate(prepared)],
++        context=_scoring_context(),
+     )
+     scored = [
+         (conv_id, source, parts, events, llm_map.get(str(i)))
+@@ -579,6 +649,10 @@ def _fetch_live(limit):
+     pairs = [(row, meta) for row, meta in pairs if row["Session_Title"]]
+     rows = [row for row, _ in pairs]
+ 
++    # Second-reader enrichment: Bee's own suggestions and day summaries,
++    # laid next to beeplex's independent measurement.
++    _enrich_rows(rows, pairs)
++
+     # Coaching dashboard: append this run's scores to the local trend
+     # history and regenerate family/dashboard.html. Automatic on every
+     # run; mock mode regenerates the page from history without appending.
+diff --git a/bee_sources.py b/bee_sources.py
+new file mode 100644
+index 0000000..c9aedea
+--- /dev/null
++++ b/bee_sources.py
+@@ -0,0 +1,623 @@
++"""Read-only Bee CLI data sources for beeplex (the plumbing layer).
++
++Thin wrappers over the official Bee CLI's *read* commands, following the
++same contract as ``bee_fetcher``:
++
++* live mode -- the ``bee`` binary is on PATH and authenticated
++  (``bee me --json`` succeeds). Real payloads are returned as parsed JSON.
++* mock mode -- forced with ``BEEX_MOCK=1``, or used automatically when the
++  CLI is missing or not logged in. Returns clearly-labelled mock payloads
++  with the same shape as the real API, so reports, agents, and demos keep
++  working offline.
++
++This layer is deliberately READ-ONLY (user's standing call, 2026-09-23):
++no ``facts create/update/delete``, no ``todos create/complete/...``.
++Beeplex observes and scores; it never modifies the owner's Bee state.
++The write commands are excluded on purpose -- see the "second reader"
++note in the integration concept.
++
++Payload shapes follow the official bee-skill docs (bee-computer/bee-skill):
++verbatim utterances are authoritative; AI summaries may contain minor
++inaccuracies. Each function returns the parsed ``--json`` payload (dict),
++or None when the live CLI call fails outside mock mode.
++
++Mock payloads are derived from a small set of scripted mock conversations
++so every source tells a coherent story in mock mode.
++"""
++
++import os
++import time
++
++from bee_fetcher import (
++    BEE_CMD,  # noqa: F401  (re-exported: override the CLI binary)
++    DEFAULT_TIMEOUT,
++    MOCK_FORCED,
++    _run_bee,
++    cli_available,
++    is_authenticated,
++)
++
++# --- mode handling (mirrors bee_fetcher, with a cached auth check) ---
++
++_AUTH_OK = None
++
++
++def _reset_auth_cache():
++    """Forget the cached live/mocked decision (tests only)."""
++    global _AUTH_OK
++    _AUTH_OK = None
++
++
++def assume_live():
++    """Mark the CLI as available and authenticated.
++
++    For callers (like bee_fetcher) that already ran their own auth check
++    and would otherwise pay for a redundant `bee me` on first use.
++    """
++    global _AUTH_OK
++    _AUTH_OK = True
++
++
++def _live():
++    """True when we should call the real CLI (not mock)."""
++    global _AUTH_OK
++    if MOCK_FORCED:
++        return False
++    if _AUTH_OK is None:
++        _AUTH_OK = cli_available() and is_authenticated()
++    return _AUTH_OK
++
++
++def _get(*args, mock):
++    """Run `bee <args> --json`, or return the mock payload."""
++    if not _live():
++        return mock()
++    return _run_bee(*args, timeout=DEFAULT_TIMEOUT)
++
++
++# --- mock data -----------------------------------------------------------
++# Small, coherent, clearly-labelled. Shapes mirror the real API.
++
++_NOW_MS = lambda: int(time.time() * 1000)  # noqa: E731
++_HOUR = 3_600_000
++
++
++def _mock_conversations():
++    now = _NOW_MS()
++    return [
++        {
++            "id": "mock-conv-1",
++            "title": "[MOCK] Sync with Priya",
++            "summary": "[MOCK] Planning session about the launch timeline.",
++            "start_time": now - 2 * _HOUR,
++            "state": "READY",
++            "utterances": [
++                {
++                    "speaker": "You",
++                    "text": "[MOCK] So if we move the launch to Thursday we're fine?",
++                    "timestamp": now - 2 * _HOUR,
++                },
++                {
++                    "speaker": "Priya",
++                    "text": "[MOCK] Thursday works, but the demo script needs a rewrite.",
++                    "timestamp": now - 2 * _HOUR + 60_000,
++                },
++            ],
++        },
++        {
++            "id": "mock-conv-2",
++            "title": "[MOCK] Call with the accountant",
++            "summary": "[MOCK] Quarterly taxes and receipt organization.",
++            "start_time": now - 5 * _HOUR,
++            "state": "READY",
++            "utterances": [
++                {
++                    "speaker": "You",
++                    "text": "[MOCK] I still haven't sorted the March receipts.",
++                    "timestamp": now - 5 * _HOUR,
++                },
++            ],
++        },
++        {
++            "id": "mock-conv-3",
++            "title": "[MOCK] Dinner with Sam",
++            "summary": "[MOCK] Catching up; Sam's marathon training.",
++            "start_time": now - 26 * _HOUR,
++            "state": "READY",
++            "utterances": [
++                {
++                    "speaker": "Sam",
++                    "text": "[MOCK] Sixteen kilometers this weekend, easy pace.",
++                    "timestamp": now - 26 * _HOUR,
++                },
++            ],
++        },
++    ]
++
++
++def _mock_conv_summaries():
++    return [
++        {k: c[k] for k in ("id", "title", "summary", "start_time", "state")}
++        for c in _mock_conversations()
++    ]
++
++
++# --- recency -------------------------------------------------------------
++
++
++def now():
++    """Conversations from the last 10 hours, with full verbatim utterances."""
++    return _get("now", mock=lambda: {"conversations": _mock_conversations()})
++
++
++def today(context=False):
++    """Today's brief; with context=True, the aggregated wearable context
++    (daily summary + active todos + notes + recent conversations)."""
++    args = ["today"] + (["--context"] if context else [])
++    return _get(
++        *args,
++        mock=lambda: {
++            "date": time.strftime("%Y-%m-%d"),
++            "brief": "[MOCK] Two meetings today: launch sync at 10, dentist at 4.",
++            **(
++                {
++                    "daily_summary": "[MOCK] A planning-heavy day.",
++                    "active_todos": _mock_todos(),
++                    "recent_conversations": _mock_conv_summaries()[:2],
++                }
++                if context
++                else {}
++            ),
++        },
++    )
++
++
++def activity(limit=20):
++    """Unified recent feed across conversations, summaries, notes, todos."""
++    return _get(
++        "activity", "--limit", str(limit),
++        mock=lambda: {
++            "items": [
++                {"type": "conversation", **s}
++                for s in _mock_conv_summaries()[:limit]
++            ]
++            + [
++                {"type": "todo", **t}
++                for t in _mock_todos()[: max(0, limit - 2)]
++            ],
++        },
++    )
++
++
++# --- search --------------------------------------------------------------
++
++
++def search(query, neural=False, filter="all", scope=None, sort="relevance",
++           since=None, until=None, limit=10):
++    """Server-side search. Keyword (BM25) by default; neural=True for
++    semantic/vector search over conversations only.
++
++    In neural mode the keyword-only flags (filter/scope/sort) are rejected
++    by the CLI, so they are omitted here too.
++    """
++    args = ["search", "--query", query, "--limit", str(limit)]
++    if neural:
++        args.append("--neural")
++    else:
++        args += ["--filter", filter, "--sort", sort]
++        if scope:
++            args += ["--scope", scope]
++    if since is not None:
++        args += ["--since", str(since)]
++    if until is not None:
++        args += ["--until", str(until)]
++
++    def _mock():
++        q = query.lower()
++        hits = [
++            c for c in _mock_conversations()
++            if q in c["title"].lower() or q in c["summary"].lower()
++            or any(q in u["text"].lower() for u in c["utterances"])
++        ]
++        return {
++            "query": query,
++            "mode": "neural" if neural else "keyword",
++            "results": _mock_conv_summaries() if not q else [
++                {k: c[k] for k in ("id", "title", "summary", "start_time", "state")}
++                for c in hits
++            ],
++        }
++
++    return _get(*args, mock=_mock)
++
++
++# --- conversations -------------------------------------------------------
++
++
++def conversation_transcript(conv_id):
++    """Just the verbatim utterance transcript for one conversation."""
++    return _get(
++        "conversations", "transcript", str(conv_id),
++        mock=lambda: {
++            "id": conv_id,
++            "utterances": next(
++                (c["utterances"] for c in _mock_conversations()
++                 if c["id"] == conv_id),
++                [],
++            ),
++        },
++    )
++
++
++def conversations_related(conv_id, limit=10):
++    """Conversations similar to the given one (a topic thread)."""
++    return _get(
++        "conversations", "related", str(conv_id), "--limit", str(limit),
++        mock=lambda: {
++            "id": conv_id,
++            "related": [
++                s for s in _mock_conv_summaries()
++                if s["id"] != conv_id
++            ][:limit],
++        },
++    )
++
++
++# --- daily summaries -----------------------------------------------------
++
++
++def _mock_daily():
++    convs = _mock_conversations()
++    days = {}
++    for c in convs:
++        day = time.strftime("%Y-%m-%d", time.localtime(c["start_time"] / 1000))
++        days.setdefault(day, []).append(c["title"])
++    return [
++        {
++            "id": f"mock-daily-{d}",
++            "date": d,
++            "summary": "[MOCK] " + "; ".join(titles),
++        }
++        for d, titles in sorted(days.items(), reverse=True)
++    ]
++
++
++def daily_list(limit=10, cursor=None):
++    """Browse day-by-day summaries, newest first."""
++    args = ["daily", "list", "--limit", str(limit)]
++    if cursor:
++        args += ["--cursor", cursor]
++    return _get(
++        *args,
++        mock=lambda: {"daily": _mock_daily()[:limit], "next_cursor": None},
++    )
++
++
++def daily_get(daily_id):
++    """One daily summary by id."""
++    return _get(
++        "daily", "get", str(daily_id),
++        mock=lambda: next(
++            (d for d in _mock_daily() if d["id"] == daily_id), None
++        ),
++    )
++
++
++def daily_find(date_str):
++    """Look up the daily summary for a YYYY-MM-DD date."""
++    return _get(
++        "daily", "find", date_str,
++        mock=lambda: next(
++            (d for d in _mock_daily() if d["date"] == date_str), None
++        ),
++    )
++
++
++# --- journals (intentional voice memos) ----------------------------------
++
++
++def _mock_journals():
++    now = _NOW_MS()
++    return [
++        {
++            "id": "mock-journal-1",
++            "state": "READY",
++            "text": "[MOCK] Idea: coach on forward motion, not just engagement.",
++            "timestamp": now - 3 * _HOUR,
++        },
++        {
++            "id": "mock-journal-2",
++            "state": "READY",
++            "text": "[MOCK] Remember to ask Priya about the demo script.",
++            "timestamp": now - 30 * _HOUR,
++        },
++    ]
++
++
++def journals_list(limit=10, cursor=None):
++    """The owner's intentional voice memos (distinct from ambient audio)."""
++    args = ["journals", "list", "--limit", str(limit)]
++    if cursor:
++        args += ["--cursor", cursor]
++    return _get(
++        *args,
++        mock=lambda: {"journals": _mock_journals()[:limit], "next_cursor": None},
++    )
++
++
++def journals_search(query, limit=10):
++    """Find a voice memo by content."""
++    return _get(
++        "journals", "search", "--query", query, "--limit", str(limit),
++        mock=lambda: {
++            "query": query,
++            "journals": [
++                j for j in _mock_journals()
++                if query.lower() in j["text"].lower()
++            ][:limit],
++        },
++    )
++
++
++def journals_get(journal_id):
++    """Full transcribed text of one voice memo."""
++    return _get(
++        "journals", "get", str(journal_id),
++        mock=lambda: next(
++            (j for j in _mock_journals() if j["id"] == journal_id), None
++        ),
++    )
++
++
++# --- insights (Bee's AI-generated patterns) ------------------------------
++
++
++def _mock_insights():
++    return [
++        {
++            "id": "mock-insight-1",
++            "title": "[MOCK] Thursday planning pattern",
++            "text": "[MOCK] Your Thursday conversations run 40% longer and "
++                    "circle back to timelines twice on average.",
++        },
++        {
++            "id": "mock-insight-2",
++            "title": "[MOCK] Quiet mornings",
++            "text": "[MOCK] You speak least before 9am; your longest turns "
++                    "happen after lunch.",
++        },
++    ]
++
++
++def insights_list(limit=50):
++    """AI-generated patterns and observations about the owner."""
++    return _get(
++        "insights", "list", "--limit", str(limit),
++        mock=lambda: {"insights": _mock_insights()[:limit]},
++    )
++
++
++def insights_get(insight_id):
++    """One insight by id."""
++    return _get(
++        "insights", "get", str(insight_id),
++        mock=lambda: next(
++            (i for i in _mock_insights() if i["id"] == insight_id), None
++        ),
++    )
++
++
++# --- locations -----------------------------------------------------------
++
++
++def _mock_places():
++    return [
++        {"name": "[MOCK] Home", "visits": 42},
++        {"name": "[MOCK] Bluebird Cafe", "visits": 7},
++    ]
++
++
++def locations_recent(from_date=None, to_date=None, limit=100):
++    """Where the owner has been. Dates are YYYY-MM-DD or ISO."""
++    args = ["locations", "recent", "--limit", str(limit)]
++    if from_date:
++        args += ["--from", from_date]
++    if to_date:
++        args += ["--to", to_date]
++    return _get(
++        *args,
++        mock=lambda: {
++            "visits": [
++                {"place": p["name"], "timestamp": _NOW_MS() - i * _HOUR * 5}
++                for i, p in enumerate(_mock_places() * 3)
++            ][:limit],
++        },
++    )
++
++
++def locations_clusters(limit=20, min_visits=None, visits=False):
++    """Frequently visited places."""
++    args = ["locations", "clusters", "--limit", str(limit)]
++    if min_visits is not None:
++        args += ["--min-visits", str(min_visits)]
++    if visits:
++        args.append("--visits")
++    return _get(
++        *args,
++        mock=lambda: {
++            "clusters": [
++                p for p in _mock_places()
++                if min_visits is None or p["visits"] >= min_visits
++            ][:limit],
++        },
++    )
++
++
++def locations_current():
++    """Latest known location."""
++    return _get(
++        "locations", "current",
++        mock=lambda: {"place": "[MOCK] Home", "timestamp": _NOW_MS()},
++    )
++
++
++# --- facts (Bee's learned profile; read-only) ----------------------------
++
++
++def _mock_facts():
++    return [
++        {
++            "id": "mock-fact-1",
++            "text": "[MOCK] Prefers morning meetings.",
++            "confirmed": True,
++        },
++        {
++            "id": "mock-fact-2",
++            "text": "[MOCK] Works on the Bee hackathon project.",
++            "confirmed": True,
++        },
++        {
++            "id": "mock-fact-3",
++            "text": "[MOCK] Might be training for a marathon.",
++            "confirmed": False,
++        },
++    ]
++
++
++def facts_list(limit=10, cursor=None, unconfirmed=False):
++    """What Bee has learned about the owner. Confirmed facts are verified;
++    unconfirmed are inferred and may be misinterpretations."""
++    args = ["facts", "list", "--limit", str(limit)]
++    if cursor:
++        args += ["--cursor", cursor]
++    if unconfirmed:
++        args.append("--unconfirmed")
++    return _get(
++        *args,
++        mock=lambda: {
++            "facts": [
++                f for f in _mock_facts()
++                if unconfirmed or f["confirmed"]
++            ][:limit],
++            "next_cursor": None,
++        },
++    )
++
++
++def facts_get(fact_id):
++    """One fact by id."""
++    return _get(
++        "facts", "get", str(fact_id),
++        mock=lambda: next(
++            (f for f in _mock_facts() if f["id"] == fact_id), None
++        ),
++    )
++
++
++def facts_search(query, limit=10):
++    """Find facts by content."""
++    return _get(
++        "facts", "search", "--query", query, "--limit", str(limit),
++        mock=lambda: {
++            "query": query,
++            "facts": [
++                f for f in _mock_facts()
++                if query.lower() in f["text"].lower()
++            ][:limit],
++        },
++    )
++
++
++# --- todos (read-only; suggestions included) -----------------------------
++
++
++def _mock_todos():
++    return [
++        {
++            "id": "mock-todo-1",
++            "text": "[MOCK] Rewrite the demo script before Thursday.",
++            "completed": False,
++        },
++        {
++            "id": "mock-todo-2",
++            "text": "[MOCK] Sort the March receipts.",
++            "completed": False,
++        },
++    ]
++
++
++def _mock_suggestions():
++    return [
++        {
++            "id": "mock-sugg-1",
++            "text": "[MOCK] Suggested: ask Priya about the timeline risk.",
++            "conversation_id": "mock-conv-1",
++        },
++    ]
++
++
++def todos_list(limit=10, cursor=None):
++    """Action items and commitments."""
++    args = ["todos", "list", "--limit", str(limit)]
++    if cursor:
++        args += ["--cursor", cursor]
++    return _get(
++        *args,
++        mock=lambda: {"todos": _mock_todos()[:limit], "next_cursor": None},
++    )
++
++
++def todos_get(todo_id):
++    """One todo by id."""
++    return _get(
++        "todos", "get", str(todo_id),
++        mock=lambda: next(
++            (t for t in _mock_todos() if t["id"] == todo_id), None
++        ),
++    )
++
++
++def todos_suggestions(limit=50):
++    """Todos Bee proposed from conversations, not yet accepted."""
++    return _get(
++        "todos", "suggestions", "--limit", str(limit),
++        mock=lambda: {"suggestions": _mock_suggestions()[:limit]},
++    )
++
++
++# --- changefeed ----------------------------------------------------------
++
++
++def changed(cursor=None):
++    """What changed since the last check (facts, todos, daily summaries,
++    conversations, journals). Persist the returned next_cursor only AFTER
++    processing the batch, so a failure retries the same changes
++    (exactly-once)."""
++    args = ["changed"] + (["--cursor", cursor] if cursor else [])
++    return _get(
++        *args,
++        mock=lambda: {
++            "cursor": cursor,
++            "next_cursor": "mock-cursor-1",
++            "conversations": _mock_conv_summaries()[:1],
++            "facts": _mock_facts()[:1],
++            "todos": _mock_todos()[:1],
++            "daily": _mock_daily()[:1],
++            "journals": [],
++        },
++    )
++
++
++# Explicit read-only surface: anything not listed here is not wrapped.
++__all__ = [
++    "now", "today", "activity",
++    "search",
++    "conversation_transcript", "conversations_related",
++    "daily_list", "daily_get", "daily_find",
++    "journals_list", "journals_search", "journals_get",
++    "insights_list", "insights_get",
++    "locations_recent", "locations_clusters", "locations_current",
++    "facts_list", "facts_get", "facts_search",
++    "todos_list", "todos_get", "todos_suggestions",
++    "changed",
++]
+diff --git a/clinical_extraction.py b/clinical_extraction.py
+index ff5d7b4..698880c 100644
+--- a/clinical_extraction.py
++++ b/clinical_extraction.py
+@@ -369,7 +369,7 @@ def extract_clinical(parts):
+ 
+     patient_concerns = [
+         _trim(t) for s, t in substantive
+-        if is_patient(s) and t.rstrip().endswith("?")
++        if is_patient(s) and "?" in t
+     ][:5]
+ 
+     plan = []
+diff --git a/llm_scoring.py b/llm_scoring.py
+index b14bd9f..d9b5ab1 100644
+--- a/llm_scoring.py
++++ b/llm_scoring.py
+@@ -190,14 +190,15 @@ def _parse_batch(text, items):
+     return results
+ 
+ 
+-def llm_engagement_batch(items):
++def llm_engagement_batch(items, context=None):
+     """Score many conversations with a SINGLE LLM API call.
+ 
+     ``items`` is [(key, parts)] with ``parts`` as [(speaker, text)].
+-    Returns {key: {"engagement": float, "rationale": str,
+-                   "tone": float|None, "tone_label": str,
+-                   "progress": float|None, "progress_label": str,
+-                   "moment": str}}.
++    ``context`` is an optional background string (e.g. Bee's confirmed
++    facts about the owner) shown to the model for context only - it is
++    never scored itself. Returns {key: {"engagement": float, "rationale":
++    str, "tone": float|None, "tone_label": str, "progress": float|None,
++    "progress_label": str, "moment": str}}.
+     Keys with no valid engagement score are omitted, so callers fall back
+     to the deterministic score for those conversations.
+ 
+@@ -213,6 +214,13 @@ def llm_engagement_batch(items):
+         f"### Conversation {key}\n{_transcript_text(parts)}" for key, parts in items
+     )
+     prompt = BATCH_PROMPT.replace("{blocks}", blocks)
++    if context:
++        prompt = prompt.replace(
++            "Conversations:\n",
++            "Background (confirmed facts Bee has learned about the owner - "
++            f"use for context only, do not score):\n{context}\n\nConversations:\n",
++            1,
++        )
+     results = {}
+     if API_KEY:
+         results = _parse_batch(_gemini_post(prompt, 2048), items)
+diff --git a/my-agent/README.md b/my-agent/README.md
+index 4c61086..400edd2 100644
+--- a/my-agent/README.md
++++ b/my-agent/README.md
+@@ -15,6 +15,8 @@ The agent's tools drive beeplex directly:
+   plus a refreshed coaching dashboard
+ - `bee_diary(limit)` — Bee's diary entry for today, in Bee's own first-person voice
+   (persona mode: who Bee has become from your history)
++- `user_profile(full, limit)` — build/update the user's living profile
++  (`family/user.md`: people, projects, preferences, events) and return it
+ 
+ (Clinical summaries are deliberately not wired up.)
+ 
+@@ -29,7 +31,10 @@ my-agent/
+ │   └── .env.local          # local-only env (gitignored)
+ ├── app/
+ │   └── my_agent/
+-│       ├── main.py         # agent entry point (tools + system prompt)
++│       ├── main.py         # agent entry point (strands tools + system prompt)
++│       ├── tools.py        # tool implementations, transport-agnostic
++│       │                   # (shared by main.py and mcp_server.py)
++│       ├── mcp_server.py   # MCP server (stdio, like `bee mcp serve`)
+ │       ├── model/load.py   # model config -> Nova Micro, ca-central-1
+ │       └── pyproject.toml  # Python dependencies
+ ├── ui/
+@@ -96,9 +101,54 @@ In `agentcore dev`, plain sentences route to the right tool:
+ - "What did Bee write about today?"
+ - "Read me Bee's diary entry."
+ 
++**Profile** (the user's living profile):
++- "What do you know about me?"
++- "Rebuild my profile from scratch."
++
+ Follow-ups work too ("tell me more about the second one"). Until `bee login`
+ is done, answers come from clearly-labelled mock data, and the agent says so.
+ 
++### MCP server (use beeplex tools from any MCP client)
++
++`app/my_agent/mcp_server.py` exposes the same five tools over MCP/stdio —
++the way `bee mcp serve` exposes the Bee CLI — so Claude Code, Claude Desktop,
++or Cursor can drive beeplex directly, no AgentCore or AWS credentials needed:
++
++```
++.venv/bin/python app/my_agent/mcp_server.py
++```
++
++Claude Code (one command, run from `beeplex/my-agent`):
++
++```
++claude mcp add beeplex -- $PWD/.venv/bin/python $PWD/app/my_agent/mcp_server.py
++```
++
++Claude Desktop (`claude_desktop_config.json`):
++
++```json
++{ "mcpServers": { "beeplex": {
++    "command": "/abs/path/to/beeplex/my-agent/.venv/bin/python",
++    "args": ["/abs/path/to/beeplex/my-agent/app/my_agent/mcp_server.py"],
++    "env": { "BEEX_MOCK": "1" }
++} } }
++```
++
++Codex (`~/.codex/config.toml`):
++
++```toml
++[mcp_servers.beeplex]
++command = "/abs/path/to/beeplex/my-agent/.venv/bin/python"
++args = ["/abs/path/to/beeplex/my-agent/app/my_agent/mcp_server.py"]
++env = { "BEEX_MOCK" = "1" }
++```
++
++Tool implementations live in `app/my_agent/tools.py`, shared with the strands
++agent — one implementation, two doors (AgentCore chat and MCP). To add a tool,
++implement `<name>_impl` there and register it in both `main.py` and
++`mcp_server.py`. Set `BEEX_MOCK=1` in the client's env to run the server
++against clearly-labelled demo data instead of the live Bee CLI.
++
+ ## Notes
+ 
+ - The model is configured in `app/my_agent/model/load.py`. Override without
+diff --git a/my-agent/app/my_agent/main.py b/my-agent/app/my_agent/main.py
+index a9dd2d2..10257df 100644
+--- a/my-agent/app/my_agent/main.py
++++ b/my-agent/app/my_agent/main.py
+@@ -3,50 +3,36 @@
+ Instead of the 00-getting-started sample's customer-support tools, this agent's
+ tools drive the user's Bee hackathon project (beeplex): fetching today's Bee
+ conversations, scoring them, generating the Word/Excel/PowerPoint reports,
+-and reading Bee's diary (the persona mode).
++reading Bee's diary (the persona mode), and maintaining the user's living
++profile (family/user.md).
+ 
+ Wrapped in BedrockAgentCoreApp so it runs both locally (agentcore dev) and on
+ AgentCore Runtime (agentcore deploy). The model is loaded from model/load.py,
+ which defaults to ca.amazon.nova-micro-v1:0 in ca-central-1.
+ """
+ 
+-import os
+-import subprocess
+-import sys
+-from pathlib import Path
+-
+ from strands import Agent, tool
+ from bedrock_agentcore.runtime import BedrockAgentCoreApp
+ 
+ from model.load import load_model
++from my_agent.tools import (
++    BEEPLEX_DIR,  # re-exported: ui/app.py imports these from here
++    _beeplex,  # re-exported: ui/app.py imports these from here
++    bee_diary_impl,
++    fetch_conversations_impl,
++    generate_report_impl,
++    score_conversations_impl,
++    user_profile_impl,
++)
+ 
+ app = BedrockAgentCoreApp()
+ 
+ log = app.logger
+ 
+-# --- beeplex location ---
+-# my-agent lives inside the beeplex repo, so the checkout root is the third
+-# parent of this file. Override with BEEPLEX_DIR if you ever separate them.
+-BEEPLEX_DIR = Path(
+-    os.environ.get("BEEPLEX_DIR", Path(__file__).resolve().parents[3])
+-).resolve()
+-
+-
+-def _beeplex():
+-    """Import bee_fetcher from the beeplex checkout (adds it to sys.path)."""
+-    if not BEEPLEX_DIR.is_dir():
+-        raise RuntimeError(
+-            f"beeplex folder not found at {BEEPLEX_DIR} "
+-            "(set BEEPLEX_DIR to point at your checkout)"
+-        )
+-    if str(BEEPLEX_DIR) not in sys.path:
+-        sys.path.insert(0, str(BEEPLEX_DIR))
+-    import bee_fetcher
+-
+-    return bee_fetcher
+-
+ 
+ # --- Tools ---
++# Implementations live in my_agent/tools.py (shared with the MCP server);
++# these are thin strands wrappers over them.
+ 
+ @tool
+ def fetch_conversations(limit: int = 5) -> str:
+@@ -59,17 +45,7 @@ def fetch_conversations(limit: int = 5) -> str:
+         One line per conversation: recording date, session title, key topic.
+         Also reports whether the data is live (Bee CLI) or mock fallback.
+     """
+-    bee_fetcher = _beeplex()
+-    rows, info = bee_fetcher.fetch_report_data(limit=limit)
+-    lines = [f"mode={info['mode']} ({info['detail']})"]
+-    if not rows:
+-        lines.append("No conversations found.")
+-    for row in rows:
+-        lines.append(
+-            f"- {row.get('Recording_Date') or 'no date'} | "
+-            f"{row.get('Session_Title')} | topic: {row.get('Key_Topic')}"
+-        )
+-    return "\n".join(lines)
++    return fetch_conversations_impl(limit=limit)
+ 
+ 
+ @tool
+@@ -86,19 +62,7 @@ def score_conversations(limit: int = 5) -> str:
+     Returns:
+         Per-conversation engagement / forward-motion / tone ratings.
+     """
+-    bee_fetcher = _beeplex()
+-    rows, info = bee_fetcher.fetch_report_data(limit=limit)
+-    lines = [f"mode={info['mode']} ({info['detail']})"]
+-    if not rows:
+-        lines.append("No conversations found.")
+-    for row in rows:
+-        lines.append(
+-            f"- {row.get('Session_Title')}:\n"
+-            f"    Engagement: {row.get('Engagement_Level')}\n"
+-            f"    Forward motion: {row.get('Forward_Motion')}\n"
+-            f"    Tone: {row.get('Tone_Rating')}"
+-        )
+-    return "\n".join(lines)
++    return score_conversations_impl(limit=limit)
+ 
+ 
+ @tool
+@@ -116,28 +80,7 @@ def generate_report(limit: int = 10) -> str:
+     Returns:
+         The files that were written, and the data source used.
+     """
+-    bee_fetcher = _beeplex()  # validates BEEPLEX_DIR exists
+-    del bee_fetcher
+-    family_dir = BEEPLEX_DIR / "family"
+-    before = {p.name for p in family_dir.glob("*")} if family_dir.is_dir() else set()
+-    proc = subprocess.run(
+-        [sys.executable, "family.py"],
+-        cwd=BEEPLEX_DIR,
+-        capture_output=True,
+-        text=True,
+-        timeout=600,
+-    )
+-    if proc.returncode != 0:
+-        return f"Report generation failed:\n{proc.stderr[-2000:]}"
+-    after = {p.name for p in family_dir.glob("*")} if family_dir.is_dir() else set()
+-    new_files = sorted(after - before)
+-    lines = ["Report generation succeeded."]
+-    if proc.stdout.strip():
+-        lines.append(proc.stdout.strip().splitlines()[-5:])
+-    if new_files:
+-        lines.append("New files in family/:")
+-        lines.extend(f"- {name}" for name in new_files)
+-    return "\n".join(str(line) for line in lines)
++    return generate_report_impl(limit=limit)
+ 
+ 
+ @tool
+@@ -154,22 +97,24 @@ def bee_diary(limit: int = 3) -> str:
+     Returns:
+         Bee's diary entry for today, in Bee's own voice.
+     """
+-    _beeplex()  # validates BEEPLEX_DIR exists
+-    from datetime import date
+-
+-    proc = subprocess.run(
+-        [sys.executable, "bee_fetcher.py", "--persona", "--limit", str(limit)],
+-        cwd=BEEPLEX_DIR,
+-        capture_output=True,
+-        text=True,
+-        timeout=600,
+-    )
+-    if proc.returncode != 0:
+-        return f"Diary generation failed:\n{proc.stderr[-2000:]}"
+-    path = BEEPLEX_DIR / "family" / f"Bee_{date.today().isoformat()}.md"
+-    if not path.is_file():
+-        return "Diary ran but no entry file was written."
+-    return path.read_text()
++    return bee_diary_impl(limit=limit)
++
++
++@tool
++def user_profile(full: bool = False, limit: int = 50) -> str:
++    """Build/update the user's living profile and return it.
++
++    Incrementally folds new Bee conversations into family/user.md (people,
++    projects, preferences, events) and returns the profile text.
++
++    Args:
++        full: Rebuild from scratch instead of incrementally (default False)
++        limit: Conversations to consider on a full rebuild (default 50)
++
++    Returns:
++        The user's living profile text.
++    """
++    return user_profile_impl(full=full, limit=limit)
+ 
+ 
+ # --- Agent Setup ---
+@@ -186,6 +131,8 @@ You have access to:
+ 2. score_conversations(limit) - engagement, forward-motion, and tone ratings per conversation
+ 3. generate_report(limit) - build the .docx/.xlsx/.pptx reports and refresh the dashboard
+ 4. bee_diary(limit) - read Bee's diary entry for today, in Bee's own first-person voice
++5. user_profile(full, limit) - build/update the user's living profile (family/user.md)
++   from their Bee conversations and return it
+ 
+ Rules:
+ - Always use the tools rather than guessing about the user's conversations.
+@@ -204,7 +151,8 @@ def get_or_create_agent():
+         _agent = Agent(
+             model=load_model(),
+             system_prompt=SYSTEM_PROMPT,
+-            tools=[fetch_conversations, score_conversations, generate_report],
++            tools=[fetch_conversations, score_conversations, generate_report,
++                   bee_diary, user_profile],
+         )
+     return _agent
+ 
+diff --git a/my-agent/app/my_agent/mcp_server.py b/my-agent/app/my_agent/mcp_server.py
+new file mode 100644
+index 0000000..db7f145
+--- /dev/null
++++ b/my-agent/app/my_agent/mcp_server.py
+@@ -0,0 +1,125 @@
++#!/usr/bin/env python3
++"""beeplex MCP server (stdio).
++
++Exposes the beeplex copilot tools over the Model Context Protocol, the same
++way ``bee mcp serve`` exposes the Bee CLI: any MCP-aware client (Claude Code,
++Claude Desktop, Cursor, ...) can call beeplex tools directly.
++
++Run:
++    /path/to/my-agent/.venv/bin/python /path/to/my-agent/app/my_agent/mcp_server.py
++
++Works from any cwd: it bootstraps ``app/`` onto sys.path itself, and the
++tools resolve the beeplex checkout relative to this file (override with
++BEEPLEX_DIR).
++
++Claude Code:
++    claude mcp add beeplex -- /abs/path/to/my-agent/.venv/bin/python \\
++        /abs/path/to/my-agent/app/my_agent/mcp_server.py
++
++Claude Desktop (claude_desktop_config.json):
++    { "mcpServers": { "beeplex": {
++        "command": "/abs/path/to/my-agent/.venv/bin/python",
++        "args": ["/abs/path/to/my-agent/app/my_agent/mcp_server.py"],
++        "env": { "BEEX_MOCK": "1" }
++    } } }
++
++Set BEEX_MOCK=1 to run against clearly-labelled demo data instead of the
++live Bee CLI (useful for testing without a Bee login).
++
++Tool implementations live in my_agent/tools.py, shared with the strands
++agent in main.py. To add a tool: implement ``<name>_impl`` there, then
++register it below.
++"""
++
++import sys
++from pathlib import Path
++
++# Make `my_agent` importable no matter where this script is launched from.
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
++
++from mcp.server.mcpserver import MCPServer  # noqa: E402
++
++from my_agent.tools import (  # noqa: E402
++    bee_diary_impl,
++    fetch_conversations_impl,
++    generate_report_impl,
++    score_conversations_impl,
++    user_profile_impl,
++)
++
++server = MCPServer(
++    "beeplex",
++    instructions=(
++        "Copilot tools for the beeplex project: the user's Bee wearable "
++        "conversations, scored for engagement (heat) and forward motion "
++        "(whether the heat cooks anything), with Word/Excel/PowerPoint "
++        "reports, a coaching dashboard, and Bee's first-person diary. "
++        "If a tool reports mock mode, say so plainly: the Bee CLI isn't "
++        "connected, so the data is clearly-labelled demo data, not the "
++        "user's real conversations. Never paste transcript contents into "
++        "chat; summaries, scores, and file names only."
++    ),
++)
++
++
++@server.tool()
++def fetch_conversations(limit: int = 5) -> str:
++    """Fetch the most recent Bee conversations.
++
++    One line per conversation: recording date, session title, key topic.
++    Also reports whether the data is live (Bee CLI) or mock fallback.
++    """
++    return fetch_conversations_impl(limit=limit)
++
++
++@server.tool()
++def score_conversations(limit: int = 5) -> str:
++    """Score the most recent Bee conversations for engagement and forward motion.
++
++    Runs beeplex's full scoring pipeline (deterministic + temporal signals,
++    plus the LLM layer when a key is configured) and reports each
++    conversation's engagement level, forward motion, and tone.
++    """
++    return score_conversations_impl(limit=limit)
++
++
++@server.tool()
++def generate_report(limit: int = 10) -> str:
++    """Generate the beeplex Word/Excel/PowerPoint reports into family/.
++
++    Fetches the latest conversations, scores them, and writes the transcript
++    log (.docx), metrics spreadsheet (.xlsx), and insights deck (.pptx), plus
++    regenerates the coaching dashboard (family/dashboard.html). Can take a
++    few minutes; the result lists the files written.
++    """
++    return generate_report_impl(limit=limit)
++
++
++@server.tool()
++def bee_diary(limit: int = 3) -> str:
++    """Read Bee's diary entry for today, in Bee's own first-person voice.
++
++    Derives who Bee has become from your history (maturity, temperament, what
++    it notices, what it remembers) and writes tonight's diary entry to
++    family/Bee_YYYY-MM-DD.md.
++    """
++    return bee_diary_impl(limit=limit)
++
++
++@server.tool()
++def user_profile(full: bool = False, limit: int = 50) -> str:
++    """Build/update the user's living profile and return it.
++
++    Incrementally folds new Bee conversations into family/user.md (people,
++    projects, preferences, events) and returns the profile text. Pass
++    full=True to rebuild from scratch instead of incrementally.
++    """
++    return user_profile_impl(full=full, limit=limit)
++
++
++def main() -> None:
++    server.run(transport="stdio")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/my-agent/app/my_agent/pyproject.toml b/my-agent/app/my_agent/pyproject.toml
+index e404174..bf76dd2 100644
+--- a/my-agent/app/my_agent/pyproject.toml
++++ b/my-agent/app/my_agent/pyproject.toml
+@@ -7,6 +7,7 @@ dependencies = [
+     "strands-agents",
+     "bedrock-agentcore",
+     "boto3",
++    "mcp",  # MCP server transport (mcp_server.py, stdio like `bee mcp serve`)
+ ]
+ 
+ [build-system]
+diff --git a/my-agent/app/my_agent/tools.py b/my-agent/app/my_agent/tools.py
+new file mode 100644
+index 0000000..6ba3679
+--- /dev/null
++++ b/my-agent/app/my_agent/tools.py
+@@ -0,0 +1,160 @@
++"""beeplex tool implementations, transport-agnostic.
++
++The five copilot tools live here as plain functions with no dependency on
++strands, AgentCore, or MCP. Each transport wraps them thinly:
++
++* ``main.py`` exposes them as strands ``@tool``s for the AgentCore agent.
++* ``mcp_server.py`` exposes them as MCP tools over stdio (like
++  ``bee mcp serve``), so any MCP-aware client can drive beeplex directly.
++
++Adding a tool: implement ``<name>_impl(...)`` here, then register it in
++each transport you want it on. Keep every function JSON-safe (str in/out)
++and never paste transcript contents into returned text -- summaries,
++scores, and file names only (family/ is gitignored and may hold real
++transcripts).
++"""
++
++import os
++import subprocess
++import sys
++from datetime import date
++from pathlib import Path
++
++# --- beeplex location ---
++# my-agent lives inside the beeplex repo, so the checkout root is the third
++# parent of this file. Override with BEEPLEX_DIR if you ever separate them.
++BEEPLEX_DIR = Path(
++    os.environ.get("BEEPLEX_DIR", Path(__file__).resolve().parents[3])
++).resolve()
++
++
++def _beeplex():
++    """Import bee_fetcher from the beeplex checkout (adds it to sys.path)."""
++    if not BEEPLEX_DIR.is_dir():
++        raise RuntimeError(
++            f"beeplex folder not found at {BEEPLEX_DIR} "
++            "(set BEEPLEX_DIR to point at your checkout)"
++        )
++    if str(BEEPLEX_DIR) not in sys.path:
++        sys.path.insert(0, str(BEEPLEX_DIR))
++    import bee_fetcher
++
++    return bee_fetcher
++
++
++def fetch_conversations_impl(limit: int = 5) -> str:
++    """Fetch the most recent Bee conversations.
++
++    One line per conversation: recording date, session title, key topic.
++    Also reports whether the data is live (Bee CLI) or mock fallback.
++    """
++    bee_fetcher = _beeplex()
++    rows, info = bee_fetcher.fetch_report_data(limit=limit)
++    lines = [f"mode={info['mode']} ({info['detail']})"]
++    if not rows:
++        lines.append("No conversations found.")
++    for row in rows:
++        lines.append(
++            f"- {row.get('Recording_Date') or 'no date'} | "
++            f"{row.get('Session_Title')} | topic: {row.get('Key_Topic')}"
++        )
++    return "\n".join(lines)
++
++
++def score_conversations_impl(limit: int = 5) -> str:
++    """Score the most recent Bee conversations for engagement and forward motion.
++
++    Runs beeplex's full scoring pipeline (deterministic + temporal signals,
++    plus the LLM layer when a key is configured) and reports each
++    conversation's engagement level, forward motion, and tone.
++    """
++    bee_fetcher = _beeplex()
++    rows, info = bee_fetcher.fetch_report_data(limit=limit)
++    lines = [f"mode={info['mode']} ({info['detail']})"]
++    if not rows:
++        lines.append("No conversations found.")
++    for row in rows:
++        lines.append(
++            f"- {row.get('Session_Title')}:\n"
++            f"    Engagement: {row.get('Engagement_Level')}\n"
++            f"    Forward motion: {row.get('Forward_Motion')}\n"
++            f"    Tone: {row.get('Tone_Rating')}"
++        )
++    return "\n".join(lines)
++
++
++def generate_report_impl(limit: int = 10) -> str:
++    """Generate the beeplex Word/Excel/PowerPoint reports into family/.
++
++    Runs family.py in the beeplex checkout, which fetches the latest
++    conversations, scores them, and writes the transcript log (.docx),
++    metrics spreadsheet (.xlsx), and insights deck (.pptx), plus regenerates
++    the coaching dashboard (family/dashboard.html).
++    """
++    _beeplex()  # validates BEEPLEX_DIR exists
++    family_dir = BEEPLEX_DIR / "family"
++    before = {p.name for p in family_dir.glob("*")} if family_dir.is_dir() else set()
++    proc = subprocess.run(
++        [sys.executable, "family.py"],
++        cwd=BEEPLEX_DIR,
++        capture_output=True,
++        text=True,
++        timeout=600,
++    )
++    if proc.returncode != 0:
++        return f"Report generation failed:\n{proc.stderr[-2000:]}"
++    after = {p.name for p in family_dir.glob("*")} if family_dir.is_dir() else set()
++    new_files = sorted(after - before)
++    lines = ["Report generation succeeded."]
++    if proc.stdout.strip():
++        lines.append(proc.stdout.strip().splitlines()[-5:])
++    if new_files:
++        lines.append("New files in family/:")
++        lines.extend(f"- {name}" for name in new_files)
++    return "\n".join(str(line) for line in lines)
++
++
++def bee_diary_impl(limit: int = 3) -> str:
++    """Read Bee's diary entry for today.
++
++    Runs beeplex's persona mode: derives who Bee has become from your history
++    (maturity, temperament, what it notices, what it remembers) and writes
++    tonight's first-person diary entry to family/Bee_YYYY-MM-DD.md.
++    """
++    _beeplex()  # validates BEEPLEX_DIR exists
++    proc = subprocess.run(
++        [sys.executable, "bee_fetcher.py", "--persona", "--limit", str(limit)],
++        cwd=BEEPLEX_DIR,
++        capture_output=True,
++        text=True,
++        timeout=600,
++    )
++    if proc.returncode != 0:
++        return f"Diary generation failed:\n{proc.stderr[-2000:]}"
++    path = BEEPLEX_DIR / "family" / f"Bee_{date.today().isoformat()}.md"
++    if not path.is_file():
++        return "Diary ran but no entry file was written."
++    return path.read_text()
++
++
++def user_profile_impl(full: bool = False, limit: int = 50) -> str:
++    """Build/update the user's living profile (family/user.md).
++
++    Runs profile.py's incremental builder: new conversations since the last
++    run are folded into family/profile_state.json, then the whole user.md
++    is re-rendered from state plus fresh static data (Bee facts, insights,
++    journals, places). Returns the profile text itself.
++    """
++    _beeplex()  # validates BEEPLEX_DIR exists
++    if str(BEEPLEX_DIR) not in sys.path:
++        sys.path.insert(0, str(BEEPLEX_DIR))
++    import profile
++
++    path, info = profile.run_profile(full=full, limit=limit)
++    header = (
++        f"mode={info['mode']} new_conversations={info['new_conversations']} "
++        f"total_conversations={info['total_conversations']} "
++        f"facts={info['facts']}\n"
++        f"--- {path} ---\n"
++    )
++    return header + Path(path).read_text()
+diff --git a/my-agent/requirements.txt b/my-agent/requirements.txt
+index b5d2759..ca189e1 100644
+--- a/my-agent/requirements.txt
++++ b/my-agent/requirements.txt
+@@ -2,6 +2,7 @@
+ strands-agents
+ bedrock-agentcore
+ boto3
++mcp  # MCP server transport (mcp_server.py, stdio like `bee mcp serve`)
+ # report generation (family.py in the beeplex checkout)
+ pandas
+ openpyxl
+diff --git a/profile.py b/profile.py
+new file mode 100644
+index 0000000..660885a
+--- /dev/null
++++ b/profile.py
+@@ -0,0 +1,506 @@
++#!/usr/bin/env python3
++"""Beeplex user profile builder: maintain family/user.md.
++
++Incrementally learns who the owner is from their Bee data and keeps a
++living profile (the skill's user.md workflow, adapted to beeplex):
++
++* new conversations since the last run -> speakers become Relationships,
++  topics feed Work & Projects, explicit date mentions become Events
++* Bee's confirmed/unconfirmed facts -> Basic info, Preferences, Notes
++  (unconfirmed facts are always flagged as Bee's inference, not truth)
++* Bee's insights -> Interests & Hobbies (attributed: "Bee noticed")
++* frequent places -> Places
++
++State lives in family/profile_state.json: per-conversation aggregates,
++processed ids, and the `changed` cursor. Each run gathers only what's
++new, then re-renders the whole user.md from state + fresh static data
++(facts/insights/journals/places are small and idempotent, so they're
++re-fetched every run). Both files stay local - family/ is gitignored -
++because a user profile is personal data, never committed.
++
++Extraction is deterministic and always runs. When an LLM provider is
++configured (llm_scoring.available()), one extra call per run asks for
++candidate profile updates as JSON, merged defensively; without a key
++the profile is built from structure alone.
++
++Usage:
++    python3 profile.py            # incremental update
++    python3 profile.py --full     # rebuild from scratch
++    python3 profile.py --limit 50 # conversations considered on --full
++"""
++
++import json
++import os
++import re
++import time
++from datetime import datetime, timezone
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++FAMILY = os.path.join(HERE, "family")
++PROFILE_MD = os.path.join(FAMILY, "user.md")
++STATE_JSON = os.path.join(FAMILY, "profile_state.json")
++
++# Speaker labels that mean the owner (case-insensitive).
++OWNER_ALIASES = {"you", "me", "owner"}
++
++# Explicit date mentions: "March 3rd", "Sep 12", weekdays.
++_DATE_RE = re.compile(
++    r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+"
++    r"\d{1,2}(?:st|nd|rd|th)?\b"
++    r"|\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b",
++    re.IGNORECASE,
++)
++
++_PROFILE_PROMPT = """You are updating a personal profile from newly overheard conversations.
++Reply with ONLY a JSON object. Include only keys you have real evidence for; omit the rest:
++{"relationships": [{"name": "...", "note": "one concrete line about this person"}],
++ "preferences": ["concrete likes/dislikes/preferences actually stated"],
++ "events": [{"hint": "the date words used", "text": "what is happening"}],
++ "notes": ["other concrete facts worth remembering"]}
++Rules: concrete and specific, plain words, no therapy-speak. Only things actually said in the transcripts - never guess.
++
++New conversations:
++{blocks}"""
++
++
++# --- state ---------------------------------------------------------------
++
++
++def _load_state():
++    try:
++        with open(STATE_JSON, encoding="utf-8") as fh:
++            state = json.load(fh)
++    except (OSError, ValueError):
++        state = {}
++    state.setdefault("processed_ids", [])
++    state.setdefault("conversations", {})
++    state.setdefault("changed_cursor", None)
++    state.setdefault("llm", {"relationships": {}, "preferences": [],
++                             "events": [], "notes": []})
++    state.setdefault("runs", 0)
++    return state
++
++
++def _save_state(state):
++    os.makedirs(FAMILY, exist_ok=True)
++    state["updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
++    tmp = STATE_JSON + ".tmp"
++    with open(tmp, "w", encoding="utf-8") as fh:
++        json.dump(state, fh, ensure_ascii=False, indent=1)
++    os.replace(tmp, STATE_JSON)
++
++
++# --- gathering -----------------------------------------------------------
++
++
++def _is_live():
++    import bee_sources
++    return bee_sources._live()
++
++
++def _summaries_to_targets(summaries, processed):
++    """[(conv_id, summary)] for ids not yet processed."""
++    targets = []
++    for s in summaries or []:
++        cid = s.get("id")
++        if cid and str(cid) not in processed:
++            targets.append((str(cid), s))
++    return targets
++
++
++def _gather_targets(limit, full, state, live):
++    """Return (targets, new_cursor). targets is [(id, summary, utterances)].
++
++    utterances is [(speaker, text)] or None when the transcript fetch
++    failed (caller retries those on the next run). new_cursor is the
++    `changed` cursor to persist after successful processing (None when
++    the full path was used).
++    """
++    from bee_fetcher import get_conversation, list_conversations, _utterance_parts
++    import bee_sources
++    processed = set(state["processed_ids"])
++    new_cursor = None
++
++    if live and not full and state["changed_cursor"]:
++        batch = bee_sources.changed(cursor=state["changed_cursor"]) or {}
++        targets = _summaries_to_targets(batch.get("conversations"), processed)
++        new_cursor = batch.get("next_cursor")
++    elif live:
++        convs = list_conversations(limit=limit) or []
++        targets = _summaries_to_targets(convs[:limit], processed)
++        if not full and not state["changed_cursor"]:
++            # Seed the changefeed cursor so the next run takes the
++            # incremental `changed` path instead of re-listing.
++            try:
++                seed = bee_sources.changed() or {}
++                new_cursor = seed.get("next_cursor")
++            except Exception:
++                new_cursor = None
++    else:
++        # Mock mode: the scripted mock conversations stand in for the feed.
++        import bee_sources
++        mocks = bee_sources._mock_conversations()[:limit]
++        return ([(c["id"],
++                  {k: c[k] for k in ("id", "title", "summary", "start_time")},
++                  [(u.get("speaker"), u["text"]) for u in c["utterances"]])
++                 for c in mocks if c["id"] not in processed],
++                "mock-cursor-1")
++
++    resolved = []
++    ok = True
++    for cid, summary in targets:
++        full_conv = get_conversation(cid)
++        if full_conv is None:
++            ok = False  # retry this conversation on the next run
++            continue
++        resolved.append((cid, summary, _utterance_parts(full_conv)))
++    if not ok:
++        new_cursor = None  # don't advance past a failed batch
++    return resolved, new_cursor
++
++
++def _gather_static(live):
++    """Facts, insights, journals, places - re-fetched every run."""
++    import bee_sources
++    if live:
++        bee_sources.assume_live()
++    facts = (bee_sources.facts_list(limit=50, unconfirmed=True) or {}).get("facts", [])
++    insights = (bee_sources.insights_list(limit=20) or {}).get("insights", [])
++    journals = (bee_sources.journals_list(limit=20) or {}).get("journals", [])
++    places = (bee_sources.locations_clusters(limit=20) or {}).get("clusters", [])
++    return {"facts": facts, "insights": insights,
++            "journals": journals, "places": places}
++
++
++# --- extraction ----------------------------------------------------------
++
++
++def _is_owner(speaker):
++    return (speaker or "").strip().lower() in OWNER_ALIASES
++
++
++def _sentence_around(text, match):
++    start = text.rfind(".", 0, match.start()) + 1
++    end = text.find(".", match.end())
++    end = len(text) if end == -1 else end + 1
++    frag = text[start:end].strip().strip(".,!?;:\"'")
++    return frag[:140]
++
++
++def _extract(cid, summary, utterances):
++    """Aggregate one conversation into state-sized signals."""
++    speakers = {}
++    for speaker, text in utterances or []:
++        if _is_owner(speaker) or not (speaker or "").strip():
++            continue
++        name = speaker.strip()
++        entry = speakers.setdefault(name, {"turns": 0, "words": 0})
++        entry["turns"] += 1
++        entry["words"] += len(text.split())
++
++    mentions = []
++    seen = set()
++    for _speaker, text in utterances or []:
++        for m in _DATE_RE.finditer(text):
++            key = m.group(0).lower()
++            if key in seen or len(mentions) >= 5:
++                continue
++            seen.add(key)
++            mentions.append({"hint": m.group(0),
++                             "context": _sentence_around(text, m)})
++
++    start = summary.get("start_time")
++    date = None
++    if isinstance(start, (int, float)):
++        epoch = start / 1000.0 if start > 10_000_000_000 else float(start)
++        date = datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d")
++
++    return {
++        "title": summary.get("title") or summary.get("summary") or cid,
++        "summary": (summary.get("summary") or "")[:200],
++        "date": date,
++        "speakers": speakers,
++        "date_mentions": mentions,
++    }
++
++
++def _bucket_fact(text):
++    t = text.lower()
++    if any(k in t for k in ("name is", "lives in", "born", "years old")):
++        return "basic"
++    if any(k in t for k in ("prefer", "like", "love", "hate", "dislike",
++                            "allergic", "favourite", "favorite",
++                            "can't stand", "cannot stand")):
++        return "preferences"
++    if any(k in t for k in ("work", "job", "project", "meeting", "client",
++                            "team", "company", "startup", "deadline", "launch")):
++        return "work"
++    return "notes"
++
++
++def _llm_candidates(targets):
++    """Best-effort LLM pass over the new transcripts. {} on any failure."""
++    try:
++        from llm_scoring import llm_text, available
++    except ImportError:
++        return {}
++    if not available() or not targets:
++        return {}
++    blocks = []
++    total = 0
++    for cid, summary, utterances in targets:
++        if not utterances:
++            continue
++        title = summary.get("title") or cid
++        text = "\n".join(f"{s or '?'}: {t}" for s, t in utterances[:40])
++        block = f"### {title}\n{text[:1500]}"
++        if total + len(block) > 6000:
++            break
++        blocks.append(block)
++        total += len(block)
++    if not blocks:
++        return {}
++    try:
++        raw = llm_text(_PROFILE_PROMPT.replace("{blocks}", "\n\n".join(blocks)),
++                       max_output_tokens=1024, temperature=0.3)
++        data = json.loads(raw) if raw else {}
++    except (ValueError, TypeError):
++        return {}
++    return data if isinstance(data, dict) else {}
++
++
++def _merge_llm(state, candidates):
++    llm = state["llm"]
++    for rel in candidates.get("relationships") or []:
++        if isinstance(rel, dict) and rel.get("name") and rel.get("note"):
++            notes = llm["relationships"].setdefault(rel["name"].strip(), [])
++            note = rel["note"].strip()[:200]
++            if note and note not in notes:
++                notes.append(note)
++    for key in ("preferences", "events", "notes"):
++        items = candidates.get(key) or []
++        seen = {json.dumps(x, sort_keys=True) for x in llm[key]}
++        for item in items:
++            blob = json.dumps(item, sort_keys=True)
++            if blob not in seen and len(llm[key]) < 50:
++                seen.add(blob)
++                llm[key].append(item)
++
++
++# --- rendering -----------------------------------------------------------
++
++
++def _render(state, static):
++    convs = state["conversations"]
++    n_conv = len(convs)
++
++    # Relationships, merged across conversations.
++    rels = {}
++    for cid, c in convs.items():
++        for name, s in c.get("speakers", {}).items():
++            r = rels.setdefault(name, {"conversations": 0, "words": 0,
++                                       "topics": [], "last": None})
++            r["conversations"] += 1
++            r["words"] += s["words"]
++            topic = (c.get("summary") or c.get("title") or "")[:70]
++            if topic and topic not in r["topics"] and len(r["topics"]) < 3:
++                r["topics"].append(topic)
++            if c.get("date") and (not r["last"] or c["date"] > r["last"]):
++                r["last"] = c["date"]
++    llm_rels = state["llm"]["relationships"]
++
++    # Facts, bucketed.
++    buckets = {"basic": [], "preferences": [], "work": [], "notes": []}
++    unconfirmed = []
++    for f in static["facts"]:
++        text = (f.get("text") or "").strip()
++        if not text:
++            continue
++        if f.get("confirmed"):
++            buckets[_bucket_fact(text)].append(text)
++        else:
++            unconfirmed.append(text)
++
++    # Frequent topics across all conversations.
++    topics = {}
++    for c in convs.values():
++        t = (c.get("summary") or c.get("title") or "").strip()
++        if t:
++            topics[t[:70]] = topics.get(t[:70], 0) + 1
++    top_topics = sorted(topics.items(), key=lambda kv: -kv[1])[:8]
++
++    # Date mentions, deduplicated.
++    events = []
++    seen_ev = set()
++    for c in convs.values():
++        for m in c.get("date_mentions", []):
++            key = (m["hint"].lower(), m["context"].lower())
++            if key in seen_ev:
++                continue
++            seen_ev.add(key)
++            events.append({**m, "conversation": c.get("title"),
++                           "date": c.get("date")})
++
++    L = []
++    A = L.append
++    A("# User Profile")
++    A(f"_Last updated: {time.strftime('%Y-%m-%d')} "
++      f"· {n_conv} conversation{'s' if n_conv != 1 else ''} processed_")
++    A("")
++    A("> Built by beeplex from your Bee data. Bee's own claims are marked;")
++    A("> unconfirmed facts are Bee's inferences and may be wrong.")
++    A("")
++
++    A("## Basic Information")
++    if buckets["basic"]:
++        for t in buckets["basic"]:
++            A(f"- {t}")
++    else:
++        A("- —")
++    A("")
++
++    A("## Relationships")
++    names = sorted(rels, key=lambda n: -rels[n]["conversations"])
++    if not names:
++        A("- —")
++    for name in names:
++        r = rels[name]
++        A(f"### {name}")
++        bits = [f"{r['conversations']} conversation{'s' if r['conversations'] != 1 else ''}",
++                f"~{r['words']} words"]
++        if r["last"]:
++            bits.append(f"last: {r['last']}")
++        A(f"- {', '.join(bits)}")
++        if r["topics"]:
++            A(f"- Topics: {'; '.join(r['topics'])}")
++        for note in llm_rels.get(name, [])[:2]:
++            A(f"- Bee's read: {note}")
++    A("")
++
++    A("## Work & Projects")
++    if buckets["work"]:
++        for t in buckets["work"]:
++            A(f"- {t} _(Bee fact)_")
++    if top_topics:
++        A("- Frequent topics: " + "; ".join(
++            f"{t} ({n}×)" for t, n in top_topics))
++    if not buckets["work"] and not top_topics:
++        A("- —")
++    A("")
++
++    A("## Interests & Hobbies")
++    if static["insights"]:
++        for ins in static["insights"]:
++            text = (ins.get("text") or ins.get("title") or "").strip()
++            if text:
++                A(f"- Bee noticed: {text}")
++    else:
++        A("- —")
++    A("")
++
++    A("## Preferences")
++    prefs = buckets["preferences"] + [
++        p for p in state["llm"]["preferences"] if isinstance(p, str)]
++    if prefs:
++        for p in prefs:
++            A(f"- {p}")
++    else:
++        A("- —")
++    A("")
++
++    A("## Places")
++    if static["places"]:
++        for p in static["places"]:
++            name = p.get("name") or p.get("place") or "?"
++            visits = p.get("visits")
++            A(f"- {name}" + (f" ({visits} visits)" if visits else ""))
++    else:
++        A("- —")
++    A("")
++
++    A("## Important Dates & Events")
++    ev_all = events + [e for e in state["llm"]["events"]
++                       if isinstance(e, dict)]
++    if ev_all:
++        for e in ev_all[:15]:
++            hint = e.get("hint", "")
++            text = e.get("text") or e.get("context", "")
++            conv = e.get("conversation")
++            line = f"- **{hint}**: {text}" if hint else f"- {text}"
++            if conv:
++                line += f" _(mentioned in: {conv[:50]})_"
++            A(line)
++    else:
++        A("- —")
++    A("")
++
++    A("## Notes")
++    notes = buckets["notes"] + [u + " _(unconfirmed — Bee inferred this, "
++                                "may be wrong)_" for u in unconfirmed]
++    for j in static["journals"][:5]:
++        text = (j.get("text") or "").strip()
++        if text:
++            notes.append(f"Voice memo: {text[:140]}")
++    notes += [n for n in state["llm"]["notes"] if isinstance(n, str)]
++    if notes:
++        for n in notes[:20]:
++            A(f"- {n}")
++    else:
++        A("- —")
++    A("")
++    return "\n".join(L)
++
++
++# --- entry point ---------------------------------------------------------
++
++
++def run_profile(full=False, limit=50):
++    """Build/update family/user.md. Returns (path, info)."""
++    state = _load_state()
++    if full:
++        state = {"processed_ids": [], "conversations": {},
++                 "changed_cursor": None,
++                 "llm": {"relationships": {}, "preferences": [],
++                         "events": [], "notes": []},
++                 "runs": state.get("runs", 0)}
++    live = _is_live()
++
++    targets, new_cursor = _gather_targets(limit, full, state, live)
++    for cid, summary, utterances in targets:
++        state["conversations"][cid] = _extract(cid, summary, utterances)
++        if cid not in state["processed_ids"]:
++            state["processed_ids"].append(cid)
++
++    if targets:
++        _merge_llm(state, _llm_candidates(targets))
++    if new_cursor:
++        state["changed_cursor"] = new_cursor
++    state["runs"] += 1
++
++    static = _gather_static(live)
++    os.makedirs(FAMILY, exist_ok=True)
++    with open(PROFILE_MD, "w", encoding="utf-8") as fh:
++        fh.write(_render(state, static))
++    _save_state(state)
++
++    return PROFILE_MD, {
++        "mode": "live" if live else "mock",
++        "new_conversations": len(targets),
++        "total_conversations": len(state["conversations"]),
++        "facts": len(static["facts"]),
++    }
++
++
++if __name__ == "__main__":
++    import argparse
++    ap = argparse.ArgumentParser(description="Build/update family/user.md "
++                                 "from Bee data.")
++    ap.add_argument("--full", action="store_true",
++                    help="Rebuild from scratch instead of incrementally.")
++    ap.add_argument("--limit", type=int, default=50,
++                    help="Conversations to consider on --full (default: 50).")
++    args = ap.parse_args()
++    path, info = run_profile(full=args.full, limit=args.limit)
++    print(f"mode={info['mode']} new={info['new_conversations']} "
++          f"total={info['total_conversations']} facts={info['facts']}")
++    print(f"wrote {path}")
+diff --git a/simulator/bee b/simulator/bee
+index 3faf5ca..537e2ea 100755
+--- a/simulator/bee
++++ b/simulator/bee
+@@ -6,11 +6,25 @@ scripted conversations instead of real Bee data:
+ 
+     PATH="$PWD/simulator:$PATH" python3 family.py
+ 
+-Emulates the documented CLI surface:
++Emulates the documented CLI surface (read commands only -- beeplex is
++read-only by design):
+     bee me --json
+     bee conversations list [--limit N] [--cursor C] --json
+     bee conversations get <id> --json
+     bee conversations transcript <id> [--since <epochMs>] --json
++    bee conversations related <id> [--limit N] --json
++    bee now --json
++    bee today [--context] --json
++    bee activity [--limit N] --json
++    bee search --query Q [--neural] [--filter F] [--sort S]
++               [--since X] [--until Y] [--limit N] --json
++    bee daily list [--limit N] | get <id> | find <YYYY-MM-DD> --json
++    bee journals list | search --query Q | get <id> --json
++    bee insights list | get <id> --json
++    bee locations recent | clusters | current --json
++    bee facts list [--unconfirmed] | get <id> | search --query Q --json
++    bee todos list | get <id> | suggestions --json
++    bee changed [--cursor C] --json
+ 
+ Payloads follow the official bee-skill docs: utterances verbatim with
+ speaker and timestamps (epoch ms), conversation summaries, start times.
+@@ -76,6 +90,76 @@ def materialize(raw):
+     return convs
+ 
+ 
++def _flag(args, name, default=None):
++    return args[args.index(name) + 1] if name in args else default
++
++
++def _day(ts_ms):
++    return time.strftime("%Y-%m-%d", time.localtime(ts_ms / 1000))
++
++
++def _fake_facts():
++    return [
++        {"id": "sim-fact-1", "text": "Prefers morning meetings.", "confirmed": True},
++        {"id": "sim-fact-2", "text": "Building a Bee hackathon project.", "confirmed": True},
++        {"id": "sim-fact-3", "text": "Might be training for a marathon.", "confirmed": False},
++    ]
++
++
++def _fake_todos():
++    return [
++        {"id": "sim-todo-1", "text": "Rewrite the demo script.", "completed": False},
++        {"id": "sim-todo-2", "text": "Sort the March receipts.", "completed": False},
++    ]
++
++
++def _fake_suggestions(convs):
++    return [
++        {
++            "id": "sim-sugg-1",
++            "text": "Suggested: follow up on the timeline risk.",
++            "conversation_id": convs[0]["id"] if convs else None,
++        },
++    ]
++
++
++def _fake_journals():
++    return [
++        {
++            "id": "sim-journal-1",
++            "state": "READY",
++            "text": "Voice memo: coach on forward motion, not just engagement.",
++            "timestamp": NOW_MS - 3 * 3_600_000,
++        },
++        {
++            "id": "sim-journal-2",
++            "state": "READY",
++            "text": "Voice memo: ask Priya about the demo script.",
++            "timestamp": NOW_MS - 30 * 3_600_000,
++        },
++    ]
++
++
++def _fake_insights():
++    return [
++        {
++            "id": "sim-insight-1",
++            "title": "Longer Thursday sessions",
++            "text": "Thursday conversations run longer and revisit timelines.",
++        },
++    ]
++
++
++def _fake_daily(convs):
++    days = {}
++    for c in convs:
++        days.setdefault(_day(c["start_time"]), []).append(c["title"])
++    return [
++        {"id": f"sim-daily-{d}", "date": d, "summary": "; ".join(t)}
++        for d, t in sorted(days.items(), reverse=True)
++    ]
++
++
+ def main(argv):
+     args = [a for a in argv if a != "--json"]
+     if os.environ.get("SIM_BEE_FAIL_AUTH") == "1" and args[:1] == ["me"]:
+@@ -119,6 +203,181 @@ def main(argv):
+         print(json.dumps({"utterances": utterances}))
+         return 0
+ 
++    if args[:2] == ["conversations", "related"] and len(args) > 2:
++        limit = int(_flag(args, "--limit", 10))
++        related = [c for c in convs if c["id"] != args[2]][:limit]
++        print(json.dumps({"id": args[2], "related": [
++            {k: c[k] for k in ("id", "title", "summary", "start_time")}
++            for c in related]}))
++        return 0
++
++    if args[:1] == ["now"]:
++        recent = [c for c in convs if NOW_MS - c["start_time"] <= 10 * 3_600_000]
++        print(json.dumps({"conversations": recent}))
++        return 0
++
++    if args[:1] == ["today"]:
++        payload = {"date": _day(NOW_MS),
++                   "brief": "Two meetings today: launch sync at 10, dentist at 4."}
++        if "--context" in args:
++            payload.update({
++                "daily_summary": "A planning-heavy day.",
++                "active_todos": _fake_todos(),
++                "recent_conversations": [
++                    {k: c[k] for k in ("id", "title", "summary", "start_time")}
++                    for c in convs[:3]],
++            })
++        print(json.dumps(payload))
++        return 0
++
++    if args[:1] == ["activity"]:
++        limit = int(_flag(args, "--limit", 20))
++        items = ([{"type": "conversation",
++                   **{k: c[k] for k in ("id", "title", "summary", "start_time")}}
++                  for c in convs]
++                 + [{"type": "todo", **t} for t in _fake_todos()])
++        print(json.dumps({"items": items[:limit]}))
++        return 0
++
++    if args[:1] == ["search"]:
++        q = (_flag(args, "--query", "") or "").lower()
++        limit = int(_flag(args, "--limit", 10))
++        neural = "--neural" in args
++        since = _flag(args, "--since")
++        until = _flag(args, "--until")
++        hits = []
++        for c in convs:
++            if since and c["start_time"] < int(since):
++                continue
++            if until and c["start_time"] > int(until):
++                continue
++            blob = (c["title"] + " " + c["summary"] + " " +
++                    " ".join(u["text"] for u in c["utterances"])).lower()
++            if not q or q in blob:
++                hits.append({k: c[k] for k in ("id", "title", "summary", "start_time")})
++        print(json.dumps({"query": _flag(args, "--query", ""),
++                          "mode": "neural" if neural else "keyword",
++                          "results": hits[:limit]}))
++        return 0
++
++    if args[:1] == ["daily"]:
++        sub = args[1] if len(args) > 1 else ""
++        if sub == "list":
++            limit = int(_flag(args, "--limit", 10))
++            print(json.dumps({"daily": _fake_daily(convs)[:limit],
++                              "next_cursor": None}))
++            return 0
++        if sub == "get" and len(args) > 2:
++            d = next((x for x in _fake_daily(convs) if x["id"] == args[2]), None)
++            print(json.dumps(d or {}))
++            return 0
++        if sub == "find" and len(args) > 2:
++            d = next((x for x in _fake_daily(convs) if x["date"] == args[2]), None)
++            print(json.dumps(d or {}))
++            return 0
++
++    if args[:1] == ["journals"]:
++        sub = args[1] if len(args) > 1 else ""
++        if sub == "list":
++            limit = int(_flag(args, "--limit", 10))
++            print(json.dumps({"journals": _fake_journals()[:limit],
++                              "next_cursor": None}))
++            return 0
++        if sub == "search":
++            q = (_flag(args, "--query", "") or "").lower()
++            limit = int(_flag(args, "--limit", 10))
++            hits = [j for j in _fake_journals() if q in j["text"].lower()]
++            print(json.dumps({"query": q, "journals": hits[:limit]}))
++            return 0
++        if sub == "get" and len(args) > 2:
++            j = next((x for x in _fake_journals() if x["id"] == args[2]), None)
++            print(json.dumps(j or {}))
++            return 0
++
++    if args[:1] == ["insights"]:
++        sub = args[1] if len(args) > 1 else ""
++        if sub == "list":
++            limit = int(_flag(args, "--limit", 50))
++            print(json.dumps({"insights": _fake_insights()[:limit]}))
++            return 0
++        if sub == "get" and len(args) > 2:
++            ins = next((x for x in _fake_insights() if x["id"] == args[2]), None)
++            print(json.dumps(ins or {}))
++            return 0
++
++    if args[:1] == ["locations"]:
++        sub = args[1] if len(args) > 1 else ""
++        places = ["Home", "Bluebird Cafe", "Office"]
++        if sub == "recent":
++            limit = int(_flag(args, "--limit", 100))
++            visits = [{"place": places[i % len(places)],
++                       "timestamp": c["start_time"]}
++                      for i, c in enumerate(convs)]
++            print(json.dumps({"visits": visits[:limit]}))
++            return 0
++        if sub == "clusters":
++            limit = int(_flag(args, "--limit", 20))
++            min_v = _flag(args, "--min-visits")
++            clusters = [{"name": p, "visits": (len(convs) // len(places)) + (3 - i)}
++                        for i, p in enumerate(places)]
++            if min_v:
++                clusters = [c for c in clusters if c["visits"] >= int(min_v)]
++            print(json.dumps({"clusters": clusters[:limit]}))
++            return 0
++        if sub == "current":
++            print(json.dumps({"place": "Home", "timestamp": NOW_MS}))
++            return 0
++
++    if args[:1] == ["facts"]:
++        sub = args[1] if len(args) > 1 else ""
++        facts = _fake_facts()
++        if sub == "list":
++            limit = int(_flag(args, "--limit", 10))
++            if "--unconfirmed" not in args:
++                facts = [f for f in facts if f["confirmed"]]
++            print(json.dumps({"facts": facts[:limit], "next_cursor": None}))
++            return 0
++        if sub == "get" and len(args) > 2:
++            f = next((x for x in facts if x["id"] == args[2]), None)
++            print(json.dumps(f or {}))
++            return 0
++        if sub == "search":
++            q = (_flag(args, "--query", "") or "").lower()
++            limit = int(_flag(args, "--limit", 10))
++            hits = [f for f in facts if q in f["text"].lower()]
++            print(json.dumps({"query": q, "facts": hits[:limit]}))
++            return 0
++
++    if args[:1] == ["todos"]:
++        sub = args[1] if len(args) > 1 else ""
++        if sub == "list":
++            limit = int(_flag(args, "--limit", 10))
++            print(json.dumps({"todos": _fake_todos()[:limit], "next_cursor": None}))
++            return 0
++        if sub == "get" and len(args) > 2:
++            t = next((x for x in _fake_todos() if x["id"] == args[2]), None)
++            print(json.dumps(t or {}))
++            return 0
++        if sub == "suggestions":
++            limit = int(_flag(args, "--limit", 50))
++            print(json.dumps({"suggestions": _fake_suggestions(convs)[:limit]}))
++            return 0
++
++    if args[:1] == ["changed"]:
++        cursor = _flag(args, "--cursor")
++        print(json.dumps({
++            "cursor": cursor,
++            "next_cursor": "sim-cursor-1",
++            "conversations": [
++                {k: c[k] for k in ("id", "title", "summary", "start_time")}
++                for c in convs[:2]],
++            "facts": _fake_facts()[:1],
++            "todos": _fake_todos()[:1],
++            "daily": _fake_daily(convs)[:1],
++            "journals": [],
++        }))
++        return 0
++
+     sys.stderr.write(f"sim-bee: unsupported command: {args}\n")
+     return 1
+ 

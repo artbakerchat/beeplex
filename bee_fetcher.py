@@ -459,8 +459,8 @@ def _row_from_source(source, parts, events, llm=_LLM_NOT_FETCHED, conv_id=None):
         "Tone_Rating": tone_cell,
         "Engagement_Level": engagement_cell,
         "Forward_Motion": forward_motion_cell,
-        # Per-conversation action items are not exposed by the CLI; the global
-        # `bee todos suggestions` feed can be mined separately.
+        # Action_Items starts empty; _enrich_rows() fills it from
+        # `bee todos suggestions` (Bee's own suggestions, verbatim).
         "Action_Items": "",
         "Summary_Notes": summary,
     }
@@ -551,6 +551,75 @@ def fetch_report_data(limit=10):
     return rows, info
 
 
+def _scoring_context():
+    """Background for the LLM scoring prompt: Bee's confirmed facts about
+    the owner. Best-effort - returns None on any failure. (Lazy import:
+    bee_sources imports this module, so it can't be imported at top.)"""
+    try:
+        from llm_scoring import available
+        if not available():
+            return None
+        import bee_sources
+        bee_sources.assume_live()  # auth already checked by our caller
+        facts = bee_sources.facts_list(limit=20) or {}
+        texts = [f.get("text", "") for f in facts.get("facts", [])
+                 if f.get("text")]
+        if not texts:
+            return None
+        return "\n".join(f"- {t[:160]}" for t in texts[:12])
+    except Exception:
+        return None
+
+
+def _enrich_rows(rows, pairs):
+    """Enrich report rows with Bee's own read surfaces (the second reader).
+
+    - Action_Items: Bee's suggested todos for each conversation, verbatim
+      and attributed, via `bee todos suggestions` (matched on
+      conversation_id).
+    - Summary_Notes: the day's own summary appended, via `bee daily find`
+      on the row's recording date (one lookup per distinct date).
+    Best-effort: any failure leaves the rows as they were.
+    """
+    import bee_sources
+    bee_sources.assume_live()  # auth already checked by our caller
+
+    try:
+        sugg = bee_sources.todos_suggestions(limit=50) or {}
+        by_conv = {}
+        for s in sugg.get("suggestions", []):
+            cid = s.get("conversation_id")
+            text = (s.get("text") or "").strip()
+            if cid and text:
+                by_conv.setdefault(str(cid), []).append(text)
+    except Exception:
+        by_conv = {}
+
+    daily_cache = {}
+
+    def day_summary(rec_date):
+        if not rec_date:
+            return None
+        key = str(rec_date)
+        if key not in daily_cache:
+            try:
+                daily_cache[key] = (bee_sources.daily_find(key) or {}).get("summary")
+            except Exception:
+                daily_cache[key] = None
+        return daily_cache[key]
+
+    for row, (conv_id, _source, _parts, _events, _llm) in pairs:
+        texts = by_conv.get(str(conv_id)) if conv_id is not None else None
+        if texts:
+            row["Action_Items"] = "; ".join(f"Bee suggests: {t}" for t in texts)
+        summary = day_summary(row.get("Recording_Date"))
+        if summary:
+            base = row.get("Summary_Notes") or ""
+            row["Summary_Notes"] = (
+                (base + "\n" if base else "") + f"Day summary (Bee): {summary}"
+            )
+
+
 def _fetch_live(limit):
     """Live path of fetch_report_data: CLI list/get, batch LLM, dashboard."""
 
@@ -565,7 +634,8 @@ def _fetch_live(limit):
         source, parts, events = _resolve_source(conv)
         prepared.append((conv_id, source, parts, events))
     llm_map = llm_engagement_batch(
-        [(str(i), parts) for i, (_, _, parts, _) in enumerate(prepared)]
+        [(str(i), parts) for i, (_, _, parts, _) in enumerate(prepared)],
+        context=_scoring_context(),
     )
     scored = [
         (conv_id, source, parts, events, llm_map.get(str(i)))
@@ -578,6 +648,10 @@ def _fetch_live(limit):
     ]
     pairs = [(row, meta) for row, meta in pairs if row["Session_Title"]]
     rows = [row for row, _ in pairs]
+
+    # Second-reader enrichment: Bee's own suggestions and day summaries,
+    # laid next to beeplex's independent measurement.
+    _enrich_rows(rows, pairs)
 
     # Coaching dashboard: append this run's scores to the local trend
     # history and regenerate family/dashboard.html. Automatic on every

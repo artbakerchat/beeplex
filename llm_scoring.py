@@ -190,14 +190,15 @@ def _parse_batch(text, items):
     return results
 
 
-def llm_engagement_batch(items):
+def llm_engagement_batch(items, context=None):
     """Score many conversations with a SINGLE LLM API call.
 
     ``items`` is [(key, parts)] with ``parts`` as [(speaker, text)].
-    Returns {key: {"engagement": float, "rationale": str,
-                   "tone": float|None, "tone_label": str,
-                   "progress": float|None, "progress_label": str,
-                   "moment": str}}.
+    ``context`` is an optional background string (e.g. Bee's confirmed
+    facts about the owner) shown to the model for context only - it is
+    never scored itself. Returns {key: {"engagement": float, "rationale":
+    str, "tone": float|None, "tone_label": str, "progress": float|None,
+    "progress_label": str, "moment": str}}.
     Keys with no valid engagement score are omitted, so callers fall back
     to the deterministic score for those conversations.
 
@@ -213,6 +214,13 @@ def llm_engagement_batch(items):
         f"### Conversation {key}\n{_transcript_text(parts)}" for key, parts in items
     )
     prompt = BATCH_PROMPT.replace("{blocks}", blocks)
+    if context:
+        prompt = prompt.replace(
+            "Conversations:\n",
+            "Background (confirmed facts Bee has learned about the owner - "
+            f"use for context only, do not score):\n{context}\n\nConversations:\n",
+            1,
+        )
     results = {}
     if API_KEY:
         results = _parse_batch(_gemini_post(prompt, 2048), items)

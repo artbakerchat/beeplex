@@ -6,11 +6,25 @@ scripted conversations instead of real Bee data:
 
     PATH="$PWD/simulator:$PATH" python3 family.py
 
-Emulates the documented CLI surface:
+Emulates the documented CLI surface (read commands only -- beeplex is
+read-only by design):
     bee me --json
     bee conversations list [--limit N] [--cursor C] --json
     bee conversations get <id> --json
     bee conversations transcript <id> [--since <epochMs>] --json
+    bee conversations related <id> [--limit N] --json
+    bee now --json
+    bee today [--context] --json
+    bee activity [--limit N] --json
+    bee search --query Q [--neural] [--filter F] [--sort S]
+               [--since X] [--until Y] [--limit N] --json
+    bee daily list [--limit N] | get <id> | find <YYYY-MM-DD> --json
+    bee journals list | search --query Q | get <id> --json
+    bee insights list | get <id> --json
+    bee locations recent | clusters | current --json
+    bee facts list [--unconfirmed] | get <id> | search --query Q --json
+    bee todos list | get <id> | suggestions --json
+    bee changed [--cursor C] --json
 
 Payloads follow the official bee-skill docs: utterances verbatim with
 speaker and timestamps (epoch ms), conversation summaries, start times.
@@ -76,6 +90,76 @@ def materialize(raw):
     return convs
 
 
+def _flag(args, name, default=None):
+    return args[args.index(name) + 1] if name in args else default
+
+
+def _day(ts_ms):
+    return time.strftime("%Y-%m-%d", time.localtime(ts_ms / 1000))
+
+
+def _fake_facts():
+    return [
+        {"id": "sim-fact-1", "text": "Prefers morning meetings.", "confirmed": True},
+        {"id": "sim-fact-2", "text": "Building a Bee hackathon project.", "confirmed": True},
+        {"id": "sim-fact-3", "text": "Might be training for a marathon.", "confirmed": False},
+    ]
+
+
+def _fake_todos():
+    return [
+        {"id": "sim-todo-1", "text": "Rewrite the demo script.", "completed": False},
+        {"id": "sim-todo-2", "text": "Sort the March receipts.", "completed": False},
+    ]
+
+
+def _fake_suggestions(convs):
+    return [
+        {
+            "id": "sim-sugg-1",
+            "text": "Suggested: follow up on the timeline risk.",
+            "conversation_id": convs[0]["id"] if convs else None,
+        },
+    ]
+
+
+def _fake_journals():
+    return [
+        {
+            "id": "sim-journal-1",
+            "state": "READY",
+            "text": "Voice memo: coach on forward motion, not just engagement.",
+            "timestamp": NOW_MS - 3 * 3_600_000,
+        },
+        {
+            "id": "sim-journal-2",
+            "state": "READY",
+            "text": "Voice memo: ask Priya about the demo script.",
+            "timestamp": NOW_MS - 30 * 3_600_000,
+        },
+    ]
+
+
+def _fake_insights():
+    return [
+        {
+            "id": "sim-insight-1",
+            "title": "Longer Thursday sessions",
+            "text": "Thursday conversations run longer and revisit timelines.",
+        },
+    ]
+
+
+def _fake_daily(convs):
+    days = {}
+    for c in convs:
+        days.setdefault(_day(c["start_time"]), []).append(c["title"])
+    return [
+        {"id": f"sim-daily-{d}", "date": d, "summary": "; ".join(t)}
+        for d, t in sorted(days.items(), reverse=True)
+    ]
+
+
 def main(argv):
     args = [a for a in argv if a != "--json"]
     if os.environ.get("SIM_BEE_FAIL_AUTH") == "1" and args[:1] == ["me"]:
@@ -117,6 +201,181 @@ def main(argv):
             since = int(args[args.index("--since") + 1])
             utterances = [u for u in utterances if u["timestamp"] >= since]
         print(json.dumps({"utterances": utterances}))
+        return 0
+
+    if args[:2] == ["conversations", "related"] and len(args) > 2:
+        limit = int(_flag(args, "--limit", 10))
+        related = [c for c in convs if c["id"] != args[2]][:limit]
+        print(json.dumps({"id": args[2], "related": [
+            {k: c[k] for k in ("id", "title", "summary", "start_time")}
+            for c in related]}))
+        return 0
+
+    if args[:1] == ["now"]:
+        recent = [c for c in convs if NOW_MS - c["start_time"] <= 10 * 3_600_000]
+        print(json.dumps({"conversations": recent}))
+        return 0
+
+    if args[:1] == ["today"]:
+        payload = {"date": _day(NOW_MS),
+                   "brief": "Two meetings today: launch sync at 10, dentist at 4."}
+        if "--context" in args:
+            payload.update({
+                "daily_summary": "A planning-heavy day.",
+                "active_todos": _fake_todos(),
+                "recent_conversations": [
+                    {k: c[k] for k in ("id", "title", "summary", "start_time")}
+                    for c in convs[:3]],
+            })
+        print(json.dumps(payload))
+        return 0
+
+    if args[:1] == ["activity"]:
+        limit = int(_flag(args, "--limit", 20))
+        items = ([{"type": "conversation",
+                   **{k: c[k] for k in ("id", "title", "summary", "start_time")}}
+                  for c in convs]
+                 + [{"type": "todo", **t} for t in _fake_todos()])
+        print(json.dumps({"items": items[:limit]}))
+        return 0
+
+    if args[:1] == ["search"]:
+        q = (_flag(args, "--query", "") or "").lower()
+        limit = int(_flag(args, "--limit", 10))
+        neural = "--neural" in args
+        since = _flag(args, "--since")
+        until = _flag(args, "--until")
+        hits = []
+        for c in convs:
+            if since and c["start_time"] < int(since):
+                continue
+            if until and c["start_time"] > int(until):
+                continue
+            blob = (c["title"] + " " + c["summary"] + " " +
+                    " ".join(u["text"] for u in c["utterances"])).lower()
+            if not q or q in blob:
+                hits.append({k: c[k] for k in ("id", "title", "summary", "start_time")})
+        print(json.dumps({"query": _flag(args, "--query", ""),
+                          "mode": "neural" if neural else "keyword",
+                          "results": hits[:limit]}))
+        return 0
+
+    if args[:1] == ["daily"]:
+        sub = args[1] if len(args) > 1 else ""
+        if sub == "list":
+            limit = int(_flag(args, "--limit", 10))
+            print(json.dumps({"daily": _fake_daily(convs)[:limit],
+                              "next_cursor": None}))
+            return 0
+        if sub == "get" and len(args) > 2:
+            d = next((x for x in _fake_daily(convs) if x["id"] == args[2]), None)
+            print(json.dumps(d or {}))
+            return 0
+        if sub == "find" and len(args) > 2:
+            d = next((x for x in _fake_daily(convs) if x["date"] == args[2]), None)
+            print(json.dumps(d or {}))
+            return 0
+
+    if args[:1] == ["journals"]:
+        sub = args[1] if len(args) > 1 else ""
+        if sub == "list":
+            limit = int(_flag(args, "--limit", 10))
+            print(json.dumps({"journals": _fake_journals()[:limit],
+                              "next_cursor": None}))
+            return 0
+        if sub == "search":
+            q = (_flag(args, "--query", "") or "").lower()
+            limit = int(_flag(args, "--limit", 10))
+            hits = [j for j in _fake_journals() if q in j["text"].lower()]
+            print(json.dumps({"query": q, "journals": hits[:limit]}))
+            return 0
+        if sub == "get" and len(args) > 2:
+            j = next((x for x in _fake_journals() if x["id"] == args[2]), None)
+            print(json.dumps(j or {}))
+            return 0
+
+    if args[:1] == ["insights"]:
+        sub = args[1] if len(args) > 1 else ""
+        if sub == "list":
+            limit = int(_flag(args, "--limit", 50))
+            print(json.dumps({"insights": _fake_insights()[:limit]}))
+            return 0
+        if sub == "get" and len(args) > 2:
+            ins = next((x for x in _fake_insights() if x["id"] == args[2]), None)
+            print(json.dumps(ins or {}))
+            return 0
+
+    if args[:1] == ["locations"]:
+        sub = args[1] if len(args) > 1 else ""
+        places = ["Home", "Bluebird Cafe", "Office"]
+        if sub == "recent":
+            limit = int(_flag(args, "--limit", 100))
+            visits = [{"place": places[i % len(places)],
+                       "timestamp": c["start_time"]}
+                      for i, c in enumerate(convs)]
+            print(json.dumps({"visits": visits[:limit]}))
+            return 0
+        if sub == "clusters":
+            limit = int(_flag(args, "--limit", 20))
+            min_v = _flag(args, "--min-visits")
+            clusters = [{"name": p, "visits": (len(convs) // len(places)) + (3 - i)}
+                        for i, p in enumerate(places)]
+            if min_v:
+                clusters = [c for c in clusters if c["visits"] >= int(min_v)]
+            print(json.dumps({"clusters": clusters[:limit]}))
+            return 0
+        if sub == "current":
+            print(json.dumps({"place": "Home", "timestamp": NOW_MS}))
+            return 0
+
+    if args[:1] == ["facts"]:
+        sub = args[1] if len(args) > 1 else ""
+        facts = _fake_facts()
+        if sub == "list":
+            limit = int(_flag(args, "--limit", 10))
+            if "--unconfirmed" not in args:
+                facts = [f for f in facts if f["confirmed"]]
+            print(json.dumps({"facts": facts[:limit], "next_cursor": None}))
+            return 0
+        if sub == "get" and len(args) > 2:
+            f = next((x for x in facts if x["id"] == args[2]), None)
+            print(json.dumps(f or {}))
+            return 0
+        if sub == "search":
+            q = (_flag(args, "--query", "") or "").lower()
+            limit = int(_flag(args, "--limit", 10))
+            hits = [f for f in facts if q in f["text"].lower()]
+            print(json.dumps({"query": q, "facts": hits[:limit]}))
+            return 0
+
+    if args[:1] == ["todos"]:
+        sub = args[1] if len(args) > 1 else ""
+        if sub == "list":
+            limit = int(_flag(args, "--limit", 10))
+            print(json.dumps({"todos": _fake_todos()[:limit], "next_cursor": None}))
+            return 0
+        if sub == "get" and len(args) > 2:
+            t = next((x for x in _fake_todos() if x["id"] == args[2]), None)
+            print(json.dumps(t or {}))
+            return 0
+        if sub == "suggestions":
+            limit = int(_flag(args, "--limit", 50))
+            print(json.dumps({"suggestions": _fake_suggestions(convs)[:limit]}))
+            return 0
+
+    if args[:1] == ["changed"]:
+        cursor = _flag(args, "--cursor")
+        print(json.dumps({
+            "cursor": cursor,
+            "next_cursor": "sim-cursor-1",
+            "conversations": [
+                {k: c[k] for k in ("id", "title", "summary", "start_time")}
+                for c in convs[:2]],
+            "facts": _fake_facts()[:1],
+            "todos": _fake_todos()[:1],
+            "daily": _fake_daily(convs)[:1],
+            "journals": [],
+        }))
         return 0
 
     sys.stderr.write(f"sim-bee: unsupported command: {args}\n")

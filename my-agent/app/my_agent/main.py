@@ -3,50 +3,36 @@
 Instead of the 00-getting-started sample's customer-support tools, this agent's
 tools drive the user's Bee hackathon project (beeplex): fetching today's Bee
 conversations, scoring them, generating the Word/Excel/PowerPoint reports,
-and reading Bee's diary (the persona mode).
+reading Bee's diary (the persona mode), and maintaining the user's living
+profile (family/user.md).
 
 Wrapped in BedrockAgentCoreApp so it runs both locally (agentcore dev) and on
 AgentCore Runtime (agentcore deploy). The model is loaded from model/load.py,
 which defaults to ca.amazon.nova-micro-v1:0 in ca-central-1.
 """
 
-import os
-import subprocess
-import sys
-from pathlib import Path
-
 from strands import Agent, tool
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 from model.load import load_model
+from my_agent.tools import (
+    BEEPLEX_DIR,  # re-exported: ui/app.py imports these from here
+    _beeplex,  # re-exported: ui/app.py imports these from here
+    bee_diary_impl,
+    fetch_conversations_impl,
+    generate_report_impl,
+    score_conversations_impl,
+    user_profile_impl,
+)
 
 app = BedrockAgentCoreApp()
 
 log = app.logger
 
-# --- beeplex location ---
-# my-agent lives inside the beeplex repo, so the checkout root is the third
-# parent of this file. Override with BEEPLEX_DIR if you ever separate them.
-BEEPLEX_DIR = Path(
-    os.environ.get("BEEPLEX_DIR", Path(__file__).resolve().parents[3])
-).resolve()
-
-
-def _beeplex():
-    """Import bee_fetcher from the beeplex checkout (adds it to sys.path)."""
-    if not BEEPLEX_DIR.is_dir():
-        raise RuntimeError(
-            f"beeplex folder not found at {BEEPLEX_DIR} "
-            "(set BEEPLEX_DIR to point at your checkout)"
-        )
-    if str(BEEPLEX_DIR) not in sys.path:
-        sys.path.insert(0, str(BEEPLEX_DIR))
-    import bee_fetcher
-
-    return bee_fetcher
-
 
 # --- Tools ---
+# Implementations live in my_agent/tools.py (shared with the MCP server);
+# these are thin strands wrappers over them.
 
 @tool
 def fetch_conversations(limit: int = 5) -> str:
@@ -59,17 +45,7 @@ def fetch_conversations(limit: int = 5) -> str:
         One line per conversation: recording date, session title, key topic.
         Also reports whether the data is live (Bee CLI) or mock fallback.
     """
-    bee_fetcher = _beeplex()
-    rows, info = bee_fetcher.fetch_report_data(limit=limit)
-    lines = [f"mode={info['mode']} ({info['detail']})"]
-    if not rows:
-        lines.append("No conversations found.")
-    for row in rows:
-        lines.append(
-            f"- {row.get('Recording_Date') or 'no date'} | "
-            f"{row.get('Session_Title')} | topic: {row.get('Key_Topic')}"
-        )
-    return "\n".join(lines)
+    return fetch_conversations_impl(limit=limit)
 
 
 @tool
@@ -86,19 +62,7 @@ def score_conversations(limit: int = 5) -> str:
     Returns:
         Per-conversation engagement / forward-motion / tone ratings.
     """
-    bee_fetcher = _beeplex()
-    rows, info = bee_fetcher.fetch_report_data(limit=limit)
-    lines = [f"mode={info['mode']} ({info['detail']})"]
-    if not rows:
-        lines.append("No conversations found.")
-    for row in rows:
-        lines.append(
-            f"- {row.get('Session_Title')}:\n"
-            f"    Engagement: {row.get('Engagement_Level')}\n"
-            f"    Forward motion: {row.get('Forward_Motion')}\n"
-            f"    Tone: {row.get('Tone_Rating')}"
-        )
-    return "\n".join(lines)
+    return score_conversations_impl(limit=limit)
 
 
 @tool
@@ -116,28 +80,7 @@ def generate_report(limit: int = 10) -> str:
     Returns:
         The files that were written, and the data source used.
     """
-    bee_fetcher = _beeplex()  # validates BEEPLEX_DIR exists
-    del bee_fetcher
-    family_dir = BEEPLEX_DIR / "family"
-    before = {p.name for p in family_dir.glob("*")} if family_dir.is_dir() else set()
-    proc = subprocess.run(
-        [sys.executable, "family.py"],
-        cwd=BEEPLEX_DIR,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    if proc.returncode != 0:
-        return f"Report generation failed:\n{proc.stderr[-2000:]}"
-    after = {p.name for p in family_dir.glob("*")} if family_dir.is_dir() else set()
-    new_files = sorted(after - before)
-    lines = ["Report generation succeeded."]
-    if proc.stdout.strip():
-        lines.append(proc.stdout.strip().splitlines()[-5:])
-    if new_files:
-        lines.append("New files in family/:")
-        lines.extend(f"- {name}" for name in new_files)
-    return "\n".join(str(line) for line in lines)
+    return generate_report_impl(limit=limit)
 
 
 @tool
@@ -154,22 +97,24 @@ def bee_diary(limit: int = 3) -> str:
     Returns:
         Bee's diary entry for today, in Bee's own voice.
     """
-    _beeplex()  # validates BEEPLEX_DIR exists
-    from datetime import date
+    return bee_diary_impl(limit=limit)
 
-    proc = subprocess.run(
-        [sys.executable, "bee_fetcher.py", "--persona", "--limit", str(limit)],
-        cwd=BEEPLEX_DIR,
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    if proc.returncode != 0:
-        return f"Diary generation failed:\n{proc.stderr[-2000:]}"
-    path = BEEPLEX_DIR / "family" / f"Bee_{date.today().isoformat()}.md"
-    if not path.is_file():
-        return "Diary ran but no entry file was written."
-    return path.read_text()
+
+@tool
+def user_profile(full: bool = False, limit: int = 50) -> str:
+    """Build/update the user's living profile and return it.
+
+    Incrementally folds new Bee conversations into family/user.md (people,
+    projects, preferences, events) and returns the profile text.
+
+    Args:
+        full: Rebuild from scratch instead of incrementally (default False)
+        limit: Conversations to consider on a full rebuild (default 50)
+
+    Returns:
+        The user's living profile text.
+    """
+    return user_profile_impl(full=full, limit=limit)
 
 
 # --- Agent Setup ---
@@ -186,6 +131,8 @@ You have access to:
 2. score_conversations(limit) - engagement, forward-motion, and tone ratings per conversation
 3. generate_report(limit) - build the .docx/.xlsx/.pptx reports and refresh the dashboard
 4. bee_diary(limit) - read Bee's diary entry for today, in Bee's own first-person voice
+5. user_profile(full, limit) - build/update the user's living profile (family/user.md)
+   from their Bee conversations and return it
 
 Rules:
 - Always use the tools rather than guessing about the user's conversations.
@@ -204,7 +151,8 @@ def get_or_create_agent():
         _agent = Agent(
             model=load_model(),
             system_prompt=SYSTEM_PROMPT,
-            tools=[fetch_conversations, score_conversations, generate_report],
+            tools=[fetch_conversations, score_conversations, generate_report,
+                   bee_diary, user_profile],
         )
     return _agent
 

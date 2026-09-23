@@ -369,7 +369,7 @@ def extract_clinical(parts):
 
     patient_concerns = [
         _trim(t) for s, t in substantive
-        if is_patient(s) and t.rstrip().endswith("?")
+        if is_patient(s) and "?" in t
     ][:5]
 
     plan = []

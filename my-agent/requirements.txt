@@ -2,6 +2,7 @@
 strands-agents
 bedrock-agentcore
 boto3
+mcp  # MCP server transport (mcp_server.py, stdio like `bee mcp serve`)
 # report generation (family.py in the beeplex checkout)
 pandas
 openpyxl

@@ -15,6 +15,8 @@ The agent's tools drive beeplex directly:
   plus a refreshed coaching dashboard
 - `bee_diary(limit)` — Bee's diary entry for today, in Bee's own first-person voice
   (persona mode: who Bee has become from your history)
+- `user_profile(full, limit)` — build/update the user's living profile
+  (`family/user.md`: people, projects, preferences, events) and return it
 
 (Clinical summaries are deliberately not wired up.)
 
@@ -29,7 +31,10 @@ my-agent/
 │   └── .env.local          # local-only env (gitignored)
 ├── app/
 │   └── my_agent/
-│       ├── main.py         # agent entry point (tools + system prompt)
+│       ├── main.py         # agent entry point (strands tools + system prompt)
+│       ├── tools.py        # tool implementations, transport-agnostic
+│       │                   # (shared by main.py and mcp_server.py)
+│       ├── mcp_server.py   # MCP server (stdio, like `bee mcp serve`)
 │       ├── model/load.py   # model config -> Nova Micro, ca-central-1
 │       └── pyproject.toml  # Python dependencies
 ├── ui/
@@ -96,8 +101,53 @@ In `agentcore dev`, plain sentences route to the right tool:
 - "What did Bee write about today?"
 - "Read me Bee's diary entry."
 
+**Profile** (the user's living profile):
+- "What do you know about me?"
+- "Rebuild my profile from scratch."
+
 Follow-ups work too ("tell me more about the second one"). Until `bee login`
 is done, answers come from clearly-labelled mock data, and the agent says so.
+
+### MCP server (use beeplex tools from any MCP client)
+
+`app/my_agent/mcp_server.py` exposes the same five tools over MCP/stdio —
+the way `bee mcp serve` exposes the Bee CLI — so Claude Code, Claude Desktop,
+or Cursor can drive beeplex directly, no AgentCore or AWS credentials needed:
+
+```
+.venv/bin/python app/my_agent/mcp_server.py
+```
+
+Claude Code (one command, run from `beeplex/my-agent`):
+
+```
+claude mcp add beeplex -- $PWD/.venv/bin/python $PWD/app/my_agent/mcp_server.py
+```
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{ "mcpServers": { "beeplex": {
+    "command": "/abs/path/to/beeplex/my-agent/.venv/bin/python",
+    "args": ["/abs/path/to/beeplex/my-agent/app/my_agent/mcp_server.py"],
+    "env": { "BEEX_MOCK": "1" }
+} } }
+```
+
+Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.beeplex]
+command = "/abs/path/to/beeplex/my-agent/.venv/bin/python"
+args = ["/abs/path/to/beeplex/my-agent/app/my_agent/mcp_server.py"]
+env = { "BEEX_MOCK" = "1" }
+```
+
+Tool implementations live in `app/my_agent/tools.py`, shared with the strands
+agent — one implementation, two doors (AgentCore chat and MCP). To add a tool,
+implement `<name>_impl` there and register it in both `main.py` and
+`mcp_server.py`. Set `BEEX_MOCK=1` in the client's env to run the server
+against clearly-labelled demo data instead of the live Bee CLI.
 
 ## Notes
 

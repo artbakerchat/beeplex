@@ -60,6 +60,19 @@ clearly-labelled `[MOCK]` sample data so the reports still build.
 Env vars: `BEEX_MOCK=1` forces mock mode; `BEE_CLI` overrides the `bee`
 binary path.
 
+### Read-only data sources (`bee_sources.py`)
+
+The plumbing layer: thin wrappers over the CLI's other *read* commands —
+`now`, `today`, `activity`, `search` (keyword + `--neural`), `conversations
+transcript`/`related`, `daily`, `journals`, `insights`, `locations`, `facts`,
+`todos` (incl. suggestions), and the `changed` changefeed. Same live/mock
+contract as `bee_fetcher` (mock payloads are `[MOCK]`-labelled and shaped
+like the real API). Deliberately **read-only**: no fact/todo
+create/update/delete — beeplex observes and scores, never modifies the
+owner's Bee state. The simulator's fake `bee` emulates all of these, so
+`PATH="simulator:$PATH" python3 -c "import bee_sources"` exercises the live
+path offline.
+
 ## LLM layer (optional)
 
 `llm_scoring.py` scores all of a run's transcripts in a single LLM call:
@@ -214,12 +227,35 @@ pollen; never nags, never therapy-speak; and honest about not knowing —
 it hears words, not faces, so "you went quiet, I don't know why" beats
 an invented reason.
 
+## User profile (`profile.py`)
+
+Bee's own read of *who you are*, maintained as a living document. Each
+run gathers only what's new — conversations via the `changed` changefeed
+(cursor persisted only after successful processing, so a failed batch
+retries), plus fresh facts, insights, journals, and frequent places —
+then re-renders `family/user.md`: relationships (speakers across
+conversations), work/projects, interests (from Bee's own insights,
+attributed), preferences (from confirmed facts), places, dated events,
+and notes. Unconfirmed facts are always flagged as Bee's inference, not
+truth. Deterministic extraction always runs; with an LLM configured, one
+extra call per run proposes candidate updates as JSON, merged
+defensively.
+
+    python3 profile.py            # incremental update
+    python3 profile.py --full     # rebuild from scratch
+
+Local and gitignored like everything in `family/` — a user profile is
+personal data, never committed.
+
 ## Simulator (no device needed)
 
 `simulator/` is a fake `bee` CLI so you can test the real live path without
-hardware or a login. It emulates `bee me`, `conversations list/get/transcript`
-with scripted conversations (`simulator/conversations.json`) shaped like the
-documented Bee payloads — verbatim utterances with speaker and timestamps.
+hardware or a login. It emulates `bee me`, `conversations list/get/transcript/related`,
+`now`, `today`, `activity`, `search` (keyword + neural), `daily`,
+`journals`, `insights`, `locations`, `facts`, `todos` (+ suggestions),
+and `changed` with scripted conversations (`simulator/conversations.json`)
+shaped like the documented Bee payloads — verbatim utterances with speaker
+and timestamps.
 
 Run the whole pipeline against it:
 

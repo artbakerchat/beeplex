@@ -1,0 +1,43 @@
+Beeplex Bedrock (Nova) enrichment setup
+=======================================
+
+1. Install the Bedrock extra
+----------------------------
+pip install -e ".[bedrock]"
+(This brings in boto3.)
+
+2. AWS credentials
+------------------
+Use the standard AWS setup - nothing beeplex-specific:
+  aws configure
+Or set env vars: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+(+ AWS_SESSION_TOKEN for temporary creds), or use an IAM role.
+
+Region comes from BEDROCK_REGION (or AWS_REGION), default ca-central-1.
+It does NOT read the region from ~/.aws/config, so set BEDROCK_REGION
+explicitly if your aws configure region is different.
+
+3. Enable model access (console - cannot be done via CLI)
+---------------------------------------------------------
+a. Open https://console.aws.amazon.com/bedrock/
+b. Switch region to ca-central-1 (top right).
+c. Left sidebar -> Model access (under Bedrock configurations).
+d. Modify model access -> check Nova Lite -> Next -> Submit.
+e. Wait for status "Access granted" (usually instant for Amazon models).
+
+Note: beeplex uses the us.amazon.nova-lite-v1:0 cross-region inference
+profile by default (Nova isn't served in-region in Canada). Requesting
+access to Nova Lite in ca-central-1 covers it.
+
+4. Opt in
+---------
+BEEPLEX_LLM=1
+Enrichment stays OFF even with credentials present - this is the switch.
+Demo mode disables it. Enabling sends transcript text to the provider.
+
+Provider order: Gemini first (GEMINI_API_KEY, can live in a gitignored
+.env file), then Bedrock Nova as fallback.
+
+5. Verify
+---------
+aws bedrock list-foundation-models --region ca-central-1 | grep -i nova

@@ -111,6 +111,19 @@ beeplex --demo profile --refresh --limit 3
 beeplex --demo doctor
 ```
 
+To review a conversation in a browser with editable speaker timing lanes and
+spoken transcript playback, run:
+
+```sh
+beeplex --demo voice mock-conv-1
+```
+
+Open the printed HTML file from `BEEPLEX_DATA_DIR/voice/` in a browser. The
+editor uses browser text-to-speech because Bee's transcript response does not
+include its original audio. Bee timestamps are used when available; otherwise
+the editor estimates segment lengths from the text. Timing and transcript edits
+are saved in that browser's local storage.
+
 Omit `--demo` for your Bee account, or set `BEEPLEX_DEMO=1` for samples.
 Every command accepts `--json` for the full tool payload and `--help` for options.
 Use `context --period date --date-str YYYY-MM-DD` for a dated summary;

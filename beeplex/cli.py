@@ -19,6 +19,7 @@ COMMANDS = {
     "search": ("search_memories", 10, "Search memories for a topic or phrase."),
     "conversations": ("fetch_conversations", 5, "Browse recent conversations."),
     "read": ("read_conversation", 50, "Read a conversation transcript."),
+    "voice": (None, None, "Open a browser transcript voice editor."),
     "todos": ("get_todos", 20, "List commitments and action items."),
     "score": ("score_conversations", 5, "Score recent conversations."),
     "report": ("generate_report", 10, "Export Office reports and a dashboard."),
@@ -56,6 +57,8 @@ def add_subcommands(parser: argparse.ArgumentParser) -> None:
                 choices=range(1, 51),
                 metavar="1..50",
             )
+        if name == "voice":
+            sub.add_argument("conversation_id")
         if name == "context":
             sub.add_argument(
                 "--period", choices=("recent", "today", "date"), default="recent"
@@ -156,6 +159,15 @@ def dispatch(args: argparse.Namespace) -> int:
         with redirect_stdout(sys.stderr):
             if args.command == "doctor":
                 payload = doctor()
+            elif args.command == "voice":
+                from .voice_editor import create_editor
+
+                from . import bee_fetcher
+
+                conversation = bee_fetcher.get_conversation(args.conversation_id)
+                if not conversation:
+                    raise BeeError(f"Conversation not found: {args.conversation_id}")
+                payload = create_editor(conversation)
             else:
                 function = getattr(server, COMMANDS[args.command][0])
                 # Direct calls bypass MCP's validation; reuse the tool annotations.
@@ -186,6 +198,9 @@ def dispatch(args: argparse.Namespace) -> int:
         for key in ("cli_error", "data_dir_error"):
             if key in payload:
                 print(payload[key])
+    elif args.command == "voice":
+        print(f"Browser transcript editor: {payload['path']}")
+        print("Open this HTML file in your browser. Audio uses browser text-to-speech.")
     else:
         print(
             f"Mode: {payload['mode']}"

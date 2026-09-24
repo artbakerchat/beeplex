@@ -65,6 +65,15 @@ Run `beeplex --config` for a live configuration, or remove `"--demo"` from your
 existing configuration, then reconnect. If Bee isn't available,
 tools return an actionable error. Live mode never silently substitutes sample data.
 
+## Concept
+
+BeePlex is deliberately **not an agent** — it is the agent's senses, not
+its brain. Any MCP-compatible host (Codex, Claude Code, Claude Desktop,
+Cursor, or Muse as a remote host) supplies the judgment; BeePlex supplies
+the memory. See [docs/host-agents.md](docs/host-agents.md) for the full
+concept, including the layered host pattern and demo/live side-by-side
+configs.
+
 ## Tools
 
 | Tool | What to ask |
@@ -83,6 +92,32 @@ tools return an actionable error. Live mode never silently substitutes sample da
 Search and conversation browsing return IDs for follow-up questions. Transcript
 reading is paginated. Prompts `catch_up` and `reflect` are available in clients
 that support MCP prompts. The `beeplex://guide` resource explains tool selection.
+
+## Direct CLI
+
+Run any tool directly from the shell, without an MCP client. For sample data:
+
+```sh
+beeplex --demo status
+beeplex --demo context --period recent --limit 5
+beeplex --demo search "launch" --semantic --limit 5
+beeplex --demo conversations --limit 5
+beeplex --demo read mock-conv-1 --offset 0 --limit 10
+beeplex --demo todos --limit 10
+beeplex --demo score --limit 3
+beeplex --demo report --limit 3
+beeplex --demo diary --limit 3
+beeplex --demo profile --refresh --limit 3
+beeplex --demo doctor
+```
+
+Omit `--demo` for your Bee account, or set `BEEPLEX_DEMO=1` for samples.
+Every command accepts `--json` for the full tool payload and `--help` for options.
+Use `context --period date --date-str YYYY-MM-DD` for a dated summary;
+search accepts `--since`/`--until`, and conversations/todos accept `--cursor`.
+Profile reads by default; `--refresh --full` rebuilds it. Report requires the
+`reports` extra. `--data-dir PATH` selects the output folder. With no subcommand,
+BeePlex still starts the MCP stdio server; `--check` and `--config` work as before.
 
 ## Configuration
 

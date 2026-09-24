@@ -6,10 +6,12 @@ import os
 from pathlib import Path
 import sys
 
+from .cli import add_subcommands, dispatch
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Chat with your Bee memories through MCP (stdio)."
+        description="Access Bee memories directly or through MCP (stdio)."
     )
     parser.add_argument(
         "--demo",
@@ -31,8 +33,11 @@ def main() -> None:
         action="store_true",
         help="Print ready-to-paste MCP client configuration and exit.",
     )
+    add_subcommands(parser)
     args = parser.parse_args()
-    if args.demo:
+    if args.command and (args.check or args.config):
+        parser.error("--check and --config cannot be combined with a subcommand")
+    if args.demo or os.getenv("BEEPLEX_DEMO") == "1":
         os.environ["BEEPLEX_DEMO"] = "1"
         # Demo is a fake CLI on the same subprocess path as the real one, not
         # a code branch. Forcing BEE_CLI keeps the demo honest even if the
@@ -68,6 +73,9 @@ def main() -> None:
         result = status()
         print(json.dumps(result, indent=2))
         raise SystemExit(0 if result["connected"] else 1)
+
+    if args.command:
+        raise SystemExit(dispatch(args))
 
     from .server import server
 

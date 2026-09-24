@@ -111,8 +111,8 @@ beeplex --demo profile --refresh --limit 3
 beeplex --demo doctor
 ```
 
-To review a conversation in a browser with editable speaker timing lanes and
-spoken transcript playback, run:
+To review a conversation in the browser editor with editable speaker timing lanes,
+separate playback voices, and spoken transcript playback, run:
 
 ```sh
 beeplex --demo voice mock-conv-1

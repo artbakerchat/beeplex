@@ -78,6 +78,21 @@ _UNBRACKETED_FILLER_RE = re.compile(
 )
 
 
+def page_rules() -> dict[str, object]:
+    """Rule tables for the voice editor's live JavaScript validator.
+
+    Single source of truth: the editor page injects these into its ``checkText``
+    function, so the browser enforces the same vocabularies as
+    :func:`validate_transcript` instead of carrying hardcoded copies.
+    """
+    return {
+        "fillers": sorted(FILLER_WORDS),
+        "tags": sorted(NONVERBAL_TAGS),
+        "punctuation": "".join(sorted(SUPPORTED_PUNCTUATION)),
+        "spellings": dict(COMMON_SPELLINGS),
+    }
+
+
 def validate_transcript(text: str, *, speaker: str | None = None) -> list[GuidelineIssue]:
     """Return actionable issues without changing *text*.
 

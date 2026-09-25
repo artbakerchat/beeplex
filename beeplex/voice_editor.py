@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import DATA_DIR
-from .transcription_guidelines import validate_segments
+from .transcription_guidelines import validate_segments, page_rules
 
 
 def _seconds(value):
@@ -162,6 +162,7 @@ button:hover{border-color:var(--blue)}
 </main>
 <script>
 const SCENARIOS=__DATA__;
+const GUIDELINE_RULES=__RULES__;
 const pick=document.getElementById('scenarioPick');
 SCENARIOS.forEach((s,i)=>{const o=document.createElement('option');o.value=s.id;o.textContent=(i+1)+'. '+s.title;pick.append(o);});
 let original=SCENARIOS[0], data=null, key='', duration=1, playhead=0, playing=false, timer=null;
@@ -194,16 +195,26 @@ function loadScenario(idx){
   render();
 }
 
-const allowedFillers=new Set(['uh-huh','mm-hmm','psst','pfft','uhm','ugh','hmm','yeah','yep','yup','ooh','huh','shh','uh','oh','aw','eh','ah']);
-const allowedTags=new Set(['laugh','cry','gag','throatclear','gasp','cough','swallow','noise','inaudible','pause']);
+// Guideline vocabularies come from transcription_guidelines.page_rules() (injected
+// as GUIDELINE_RULES at page generation), so the browser enforces the same rules
+// as the Python validator instead of carrying hardcoded copies.
+const escRe=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+const fillerSet=new Set(GUIDELINE_RULES.fillers);
+const tagSet=new Set(GUIDELINE_RULES.tags);
+const punctSet=new Set(GUIDELINE_RULES.punctuation);
+const unbracketedFillerRe=new RegExp('(?<![\\w\\[])\\b('+GUIDELINE_RULES.fillers.slice().sort((a,b)=>b.length-a.length).map(escRe).join('|')+')\\b(?!\\])','i');
 function checkText(text){
   const issues=[];
-  for(const m of text.matchAll(/<([^<>]*)>/g)) if(!allowedTags.has(m[1].trim().toLowerCase())) issues.push('unknown tag '+m[0]);
-  for(const m of text.matchAll(/\[([^\[\]]*)\]/g)) if(!allowedFillers.has(m[1].trim().toLowerCase())) issues.push('unsupported filler '+m[0]);
-  if(/(?<![\w\[])\b(uh-huh|mm-hmm|psst|pfft|uhm|ugh|hmm|yeah|yep|yup|ooh|huh|shh|uh|oh|aw|eh|ah)\b(?!\])/i.test(text)) issues.push('put fillers in [square brackets]');
+  if(!text.trim()){issues.push('add the words or non-verbal events heard in the audio');return issues;}
+  for(const m of text.matchAll(/<([^<>]*)>/g)) if(!tagSet.has(m[1].trim().toLowerCase())) issues.push('unknown tag '+m[0]);
+  for(const m of text.matchAll(/\[([^\[\]]*)\]/g)) if(!fillerSet.has(m[1].trim().toLowerCase())) issues.push('unsupported filler '+m[0]);
+  if(unbracketedFillerRe.test(text)) issues.push('put fillers in [square brackets]');
   const plain=text.replace(/<[^<>]*>|\[[^\[\]]*\]|\(\([^()]*\)\)|\{[^{}]*\}/g,'').replace(/!\?/g,'');
-  const bad=[...new Set([...plain].filter(ch=>!/[\p{L}\p{N}\s.?!,\"'\-]/u.test(ch)))];
+  const bad=[...new Set([...plain].filter(ch=>!/[\p{L}\p{N}\s]/u.test(ch)&&!punctSet.has(ch)))];
   if(bad.length) issues.push('unsupported punctuation: '+bad.join(' '));
+  for(const [wrong,right] of Object.entries(GUIDELINE_RULES.spellings))
+    if(new RegExp('(?<![\\w\'])'+escRe(wrong)+'(?![\\w\'])','i').test(text)) issues.push('use '+right+' instead of '+wrong);
+  if(text.trimEnd().endsWith('-')) issues.push('confirm the trailing hyphen is a spoken fragment or abrupt cut-off');
   return issues;
 }
 function updateGuidelineStatus(){
@@ -286,7 +297,7 @@ function render(){
     const speakerInput=document.createElement('input'); speakerInput.className='who'; speakerInput.type='text'; speakerInput.value=s.speaker; speakerInput.setAttribute('aria-label','Speaker '+(i+1));
     speakerInput.onchange=()=>{s.speaker=speakerInput.value.trim()||'Speaker 1';save();};
     const times=document.createElement('div'); times.className='times';
-    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);if(s.end<=s.start)s.end=+(s.start+0.1).toFixed(2);save();};times.append(input);});
+    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);const floor=minDur(s),ceil=maxDur(s),len=s.end-s.start;if(len<floor){if(k==='start')s.start=Math.max(0,+(s.end-floor).toFixed(3));else s.end=+(s.start+floor).toFixed(3);}else if(len>ceil){if(k==='start')s.start=Math.max(0,+(s.end-ceil).toFixed(3));else s.end=Math.min(duration,+(s.start+ceil).toFixed(3));}save();};times.append(input);});
     const btn=document.createElement('button'); btn.className='segplay'; btn.textContent='▶'; btn.title='Speak segment '+(i+1); btn.onclick=()=>speak(s);
     const idx=document.createElement('div'); idx.className='muted'; idx.style.fontSize='12px'; idx.textContent='#'+(i+1);
     const issues=document.createElement('div'); issues.className='issues';
@@ -296,6 +307,14 @@ function render(){
   renderVoiceChoices();
   updateGuidelineStatus();
 }
+// No audio file exists, so a segment's true length is only an approximation
+// from its transcript. The segment hugs its text inside a band: a floor at
+// ~150 wpm (the words need at least this long) and a ceiling at ~60 wpm
+// (slower than this is dead air). Dragging and the time inputs can never
+// push a segment outside that band.
+function wcount(s){return s.text.trim().split(/\s+/).filter(Boolean).length||1;}
+function minDur(s){return Math.max(0.8,wcount(s)*0.4);}
+function maxDur(s){return Math.max(2.5,wcount(s)*1.0);}
 function drag(e,s,mode){
   e.preventDefault(); e.stopPropagation();
   const target=e.currentTarget, startX=e.clientX, startY=e.clientY, oldA=s.start, oldB=s.end;
@@ -306,8 +325,9 @@ function drag(e,s,mode){
   function move(ev){
     if(Math.abs(ev.clientX-startX)+Math.abs(ev.clientY-startY)>4) moved=true;
     const delta=(ev.clientX-startX)*scale;
-    if(mode==='left') s.start=Math.max(0,Math.min(oldA+delta,oldB-0.1));
-    else if(mode==='right') s.end=Math.min(duration,Math.max(oldA+0.1,oldB+delta));
+    const floor=minDur(s), ceil=maxDur(s);
+    if(mode==='left') s.start=Math.max(0,oldB-ceil,Math.min(oldA+delta,oldB-floor));
+    else if(mode==='right') s.end=Math.min(duration,Math.min(oldA+ceil,Math.max(oldA+floor,oldB+delta)));
     else { const len=oldB-oldA; const maxStart=Math.max(0,duration-len); let ns=Math.max(0,Math.min(maxStart,oldA+delta)); s.start=+ns.toFixed(3); s.end=+(ns+len).toFixed(3); }
     clip.style.left=(s.start/duration*100)+'%';
     clip.style.width=Math.max(0.8,(s.end-s.start)/duration*100)+'%';
@@ -358,6 +378,7 @@ def create_editor(conversation):
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{slug}.html"
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    rules = json.dumps(page_rules(), ensure_ascii=False).replace("</", "<\\/")
     page = (
         _VOICE_PAGE.replace("__TITLE__", "Bee voice transcript editor")
         .replace(
@@ -365,6 +386,7 @@ def create_editor(conversation):
             "Bee transcript \u00b7 browser generated voice \u00b7 drag clips to move, drag edges to trim",
         )
         .replace("__DATA__", "[" + payload + "]")
+        .replace("__RULES__", rules)
     )
     path.write_text(page, encoding="utf-8")
     return {"path": str(path), "segments": len(data["segments"])}
@@ -390,6 +412,7 @@ def create_aggregate(conversations, limit=50):
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "slack.html"
     payload = json.dumps(scenarios, ensure_ascii=False).replace("</", "<\\/")
+    rules = json.dumps(page_rules(), ensure_ascii=False).replace("</", "<\\/")
     if DEMO:
         title = "Bee voice transcript editor \u2014 all demo scenarios"
         subtitle = "All beeplex demo scenarios \u00b7 browser generated voice \u00b7 drag clips to move, drag edges to trim"
@@ -400,6 +423,7 @@ def create_aggregate(conversations, limit=50):
         _VOICE_PAGE.replace("__TITLE__", title)
         .replace("__SUBTITLE__", subtitle)
         .replace("__DATA__", payload)
+        .replace("__RULES__", rules)
     )
     path.write_text(page, encoding="utf-8")
     return {"path": str(path), "scenarios": len(scenarios)}

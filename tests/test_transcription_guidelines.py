@@ -1,4 +1,12 @@
-from beeplex.transcription_guidelines import validate_segments, validate_transcript
+from beeplex.transcription_guidelines import (
+    COMMON_SPELLINGS,
+    FILLER_WORDS,
+    NONVERBAL_TAGS,
+    SUPPORTED_PUNCTUATION,
+    page_rules,
+    validate_segments,
+    validate_transcript,
+)
 
 
 def codes(text):
@@ -34,3 +42,19 @@ def test_segment_summary_is_page_safe():
     assert result["standard"] == "Spontaneous Speech Data Annotations"
     assert result["speakerCount"] == 1
     assert result["hasErrors"] is False
+
+
+def test_page_rules_are_the_validator_vocabularies():
+    import json
+
+    rules = json.loads(json.dumps(page_rules()))  # must survive a JSON round-trip
+    assert set(rules["fillers"]) == set(FILLER_WORDS)
+    assert set(rules["tags"]) == set(NONVERBAL_TAGS)
+    assert set(rules["punctuation"]) == set(SUPPORTED_PUNCTUATION)
+    assert rules["spellings"] == dict(COMMON_SPELLINGS)
+    # Every injected vocabulary entry is accepted by the validator itself,
+    # so the page's live checkText can never disagree with validate_transcript.
+    for filler in rules["fillers"]:
+        assert "unknown-filler" not in codes(f"[{filler}]")
+    for tag in rules["tags"]:
+        assert "unknown-tag" not in codes(f"<{tag}>")

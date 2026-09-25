@@ -1,0 +1,195 @@
+diff --git a/beeplex/voice_editor.py b/beeplex/voice_editor.py
+index cd2e60d..459d304 100644
+--- a/beeplex/voice_editor.py
++++ b/beeplex/voice_editor.py
+@@ -250,13 +250,21 @@ function render(){
+     const speakerInput=document.createElement('input'); speakerInput.className='who'; speakerInput.type='text'; speakerInput.value=s.speaker; speakerInput.setAttribute('aria-label','Speaker '+(i+1));
+     speakerInput.onchange=()=>{s.speaker=speakerInput.value.trim()||'Speaker 1';save();};
+     const times=document.createElement('div'); times.className='times';
+-    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);if(s.end<=s.start)s.end=+(s.start+0.1).toFixed(2);save();};times.append(input);});
++    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);const floor=minDur(s),ceil=maxDur(s),len=s.end-s.start;if(len<floor){if(k==='start')s.start=Math.max(0,+(s.end-floor).toFixed(3));else s.end=+(s.start+floor).toFixed(3);}else if(len>ceil){if(k==='start')s.start=Math.max(0,+(s.end-ceil).toFixed(3));else s.end=Math.min(duration,+(s.start+ceil).toFixed(3));}save();};times.append(input);});
+     const btn=document.createElement('button'); btn.className='segplay'; btn.textContent='▶'; btn.title='Speak segment '+(i+1); btn.onclick=()=>speak(s);
+     const idx=document.createElement('div'); idx.className='muted'; idx.style.fontSize='12px'; idx.textContent='#'+(i+1);
+     row.append(idx,transcript,speakerInput,times,btn); list.append(row);
+   });
+   renderVoiceChoices();
+ }
++// No audio file exists, so a segment's true length is only an approximation
++// from its transcript. The segment hugs its text inside a band: a floor at
++// ~150 wpm (the words need at least this long) and a ceiling at ~60 wpm
++// (slower than this is dead air). Dragging and the time inputs can never
++// push a segment outside that band.
++function wcount(s){return s.text.trim().split(/\s+/).filter(Boolean).length||1;}
++function minDur(s){return Math.max(0.8,wcount(s)*0.4);}
++function maxDur(s){return Math.max(2.5,wcount(s)*1.0);}
+ function drag(e,s,mode){
+   e.preventDefault(); e.stopPropagation();
+   const target=e.currentTarget, startX=e.clientX, startY=e.clientY, oldA=s.start, oldB=s.end;
+@@ -267,8 +275,9 @@ function drag(e,s,mode){
+   function move(ev){
+     if(Math.abs(ev.clientX-startX)+Math.abs(ev.clientY-startY)>4) moved=true;
+     const delta=(ev.clientX-startX)*scale;
+-    if(mode==='left') s.start=Math.max(0,Math.min(oldA+delta,oldB-0.1));
+-    else if(mode==='right') s.end=Math.min(duration,Math.max(oldA+0.1,oldB+delta));
++    const floor=minDur(s), ceil=maxDur(s);
++    if(mode==='left') s.start=Math.max(0,oldB-ceil,Math.min(oldA+delta,oldB-floor));
++    else if(mode==='right') s.end=Math.min(duration,Math.min(oldA+ceil,Math.max(oldA+floor,oldB+delta)));
+     else { const len=oldB-oldA; const maxStart=Math.max(0,duration-len); let ns=Math.max(0,Math.min(maxStart,oldA+delta)); s.start=+ns.toFixed(3); s.end=+(ns+len).toFixed(3); }
+     clip.style.left=(s.start/duration*100)+'%';
+     clip.style.width=Math.max(0.8,(s.end-s.start)/duration*100)+'%';
+diff --git a/demo/voice/sim_argument.html b/demo/voice/sim_argument.html
+index 9eab3e6..0e5ba0b 100644
+--- a/demo/voice/sim_argument.html
++++ b/demo/voice/sim_argument.html
+@@ -184,13 +184,21 @@ function render(){
+     const speakerInput=document.createElement('input'); speakerInput.className='who'; speakerInput.type='text'; speakerInput.value=s.speaker; speakerInput.setAttribute('aria-label','Speaker '+(i+1));
+     speakerInput.onchange=()=>{s.speaker=speakerInput.value.trim()||'Speaker 1';save();};
+     const times=document.createElement('div'); times.className='times';
+-    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);if(s.end<=s.start)s.end=+(s.start+0.1).toFixed(2);save();};times.append(input);});
++    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);const floor=minDur(s),ceil=maxDur(s),len=s.end-s.start;if(len<floor){if(k==='start')s.start=Math.max(0,+(s.end-floor).toFixed(3));else s.end=+(s.start+floor).toFixed(3);}else if(len>ceil){if(k==='start')s.start=Math.max(0,+(s.end-ceil).toFixed(3));else s.end=Math.min(duration,+(s.start+ceil).toFixed(3));}save();};times.append(input);});
+     const btn=document.createElement('button'); btn.className='segplay'; btn.textContent='▶'; btn.title='Speak segment '+(i+1); btn.onclick=()=>speak(s);
+     const idx=document.createElement('div'); idx.className='muted'; idx.style.fontSize='12px'; idx.textContent='#'+(i+1);
+     row.append(idx,transcript,speakerInput,times,btn); list.append(row);
+   });
+   renderVoiceChoices();
+ }
++// No audio file exists, so a segment's true length is only an approximation
++// from its transcript. The segment hugs its text inside a band: a floor at
++// ~150 wpm (the words need at least this long) and a ceiling at ~60 wpm
++// (slower than this is dead air). Dragging and the time inputs can never
++// push a segment outside that band.
++function wcount(s){return s.text.trim().split(/\s+/).filter(Boolean).length||1;}
++function minDur(s){return Math.max(0.8,wcount(s)*0.4);}
++function maxDur(s){return Math.max(2.5,wcount(s)*1.0);}
+ function drag(e,s,mode){
+   e.preventDefault(); e.stopPropagation();
+   const target=e.currentTarget, startX=e.clientX, startY=e.clientY, oldA=s.start, oldB=s.end;
+@@ -201,8 +209,9 @@ function drag(e,s,mode){
+   function move(ev){
+     if(Math.abs(ev.clientX-startX)+Math.abs(ev.clientY-startY)>4) moved=true;
+     const delta=(ev.clientX-startX)*scale;
+-    if(mode==='left') s.start=Math.max(0,Math.min(oldA+delta,oldB-0.1));
+-    else if(mode==='right') s.end=Math.min(duration,Math.max(oldA+0.1,oldB+delta));
++    const floor=minDur(s), ceil=maxDur(s);
++    if(mode==='left') s.start=Math.max(0,oldB-ceil,Math.min(oldA+delta,oldB-floor));
++    else if(mode==='right') s.end=Math.min(duration,Math.min(oldA+ceil,Math.max(oldA+floor,oldB+delta)));
+     else { const len=oldB-oldA; const maxStart=Math.max(0,duration-len); let ns=Math.max(0,Math.min(maxStart,oldA+delta)); s.start=+ns.toFixed(3); s.end=+(ns+len).toFixed(3); }
+     clip.style.left=(s.start/duration*100)+'%';
+     clip.style.width=Math.max(0.8,(s.end-s.start)/duration*100)+'%';
+diff --git a/demo/voice/sim_debate.html b/demo/voice/sim_debate.html
+index f3335b6..ffecf97 100644
+--- a/demo/voice/sim_debate.html
++++ b/demo/voice/sim_debate.html
+@@ -184,13 +184,21 @@ function render(){
+     const speakerInput=document.createElement('input'); speakerInput.className='who'; speakerInput.type='text'; speakerInput.value=s.speaker; speakerInput.setAttribute('aria-label','Speaker '+(i+1));
+     speakerInput.onchange=()=>{s.speaker=speakerInput.value.trim()||'Speaker 1';save();};
+     const times=document.createElement('div'); times.className='times';
+-    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);if(s.end<=s.start)s.end=+(s.start+0.1).toFixed(2);save();};times.append(input);});
++    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);const floor=minDur(s),ceil=maxDur(s),len=s.end-s.start;if(len<floor){if(k==='start')s.start=Math.max(0,+(s.end-floor).toFixed(3));else s.end=+(s.start+floor).toFixed(3);}else if(len>ceil){if(k==='start')s.start=Math.max(0,+(s.end-ceil).toFixed(3));else s.end=Math.min(duration,+(s.start+ceil).toFixed(3));}save();};times.append(input);});
+     const btn=document.createElement('button'); btn.className='segplay'; btn.textContent='▶'; btn.title='Speak segment '+(i+1); btn.onclick=()=>speak(s);
+     const idx=document.createElement('div'); idx.className='muted'; idx.style.fontSize='12px'; idx.textContent='#'+(i+1);
+     row.append(idx,transcript,speakerInput,times,btn); list.append(row);
+   });
+   renderVoiceChoices();
+ }
++// No audio file exists, so a segment's true length is only an approximation
++// from its transcript. The segment hugs its text inside a band: a floor at
++// ~150 wpm (the words need at least this long) and a ceiling at ~60 wpm
++// (slower than this is dead air). Dragging and the time inputs can never
++// push a segment outside that band.
++function wcount(s){return s.text.trim().split(/\s+/).filter(Boolean).length||1;}
++function minDur(s){return Math.max(0.8,wcount(s)*0.4);}
++function maxDur(s){return Math.max(2.5,wcount(s)*1.0);}
+ function drag(e,s,mode){
+   e.preventDefault(); e.stopPropagation();
+   const target=e.currentTarget, startX=e.clientX, startY=e.clientY, oldA=s.start, oldB=s.end;
+@@ -201,8 +209,9 @@ function drag(e,s,mode){
+   function move(ev){
+     if(Math.abs(ev.clientX-startX)+Math.abs(ev.clientY-startY)>4) moved=true;
+     const delta=(ev.clientX-startX)*scale;
+-    if(mode==='left') s.start=Math.max(0,Math.min(oldA+delta,oldB-0.1));
+-    else if(mode==='right') s.end=Math.min(duration,Math.max(oldA+0.1,oldB+delta));
++    const floor=minDur(s), ceil=maxDur(s);
++    if(mode==='left') s.start=Math.max(0,oldB-ceil,Math.min(oldA+delta,oldB-floor));
++    else if(mode==='right') s.end=Math.min(duration,Math.min(oldA+ceil,Math.max(oldA+floor,oldB+delta)));
+     else { const len=oldB-oldA; const maxStart=Math.max(0,duration-len); let ns=Math.max(0,Math.min(maxStart,oldA+delta)); s.start=+ns.toFixed(3); s.end=+(ns+len).toFixed(3); }
+     clip.style.left=(s.start/duration*100)+'%';
+     clip.style.width=Math.max(0.8,(s.end-s.start)/duration*100)+'%';
+diff --git a/demo/voice/slack.html b/demo/voice/slack.html
+index caf166f..4550034 100644
+--- a/demo/voice/slack.html
++++ b/demo/voice/slack.html
+@@ -184,13 +184,21 @@ function render(){
+     const speakerInput=document.createElement('input'); speakerInput.className='who'; speakerInput.type='text'; speakerInput.value=s.speaker; speakerInput.setAttribute('aria-label','Speaker '+(i+1));
+     speakerInput.onchange=()=>{s.speaker=speakerInput.value.trim()||'Speaker 1';save();};
+     const times=document.createElement('div'); times.className='times';
+-    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);if(s.end<=s.start)s.end=+(s.start+0.1).toFixed(2);save();};times.append(input);});
++    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);const floor=minDur(s),ceil=maxDur(s),len=s.end-s.start;if(len<floor){if(k==='start')s.start=Math.max(0,+(s.end-floor).toFixed(3));else s.end=+(s.start+floor).toFixed(3);}else if(len>ceil){if(k==='start')s.start=Math.max(0,+(s.end-ceil).toFixed(3));else s.end=Math.min(duration,+(s.start+ceil).toFixed(3));}save();};times.append(input);});
+     const btn=document.createElement('button'); btn.className='segplay'; btn.textContent='▶'; btn.title='Speak segment '+(i+1); btn.onclick=()=>speak(s);
+     const idx=document.createElement('div'); idx.className='muted'; idx.style.fontSize='12px'; idx.textContent='#'+(i+1);
+     row.append(idx,transcript,speakerInput,times,btn); list.append(row);
+   });
+   renderVoiceChoices();
+ }
++// No audio file exists, so a segment's true length is only an approximation
++// from its transcript. The segment hugs its text inside a band: a floor at
++// ~150 wpm (the words need at least this long) and a ceiling at ~60 wpm
++// (slower than this is dead air). Dragging and the time inputs can never
++// push a segment outside that band.
++function wcount(s){return s.text.trim().split(/\s+/).filter(Boolean).length||1;}
++function minDur(s){return Math.max(0.8,wcount(s)*0.4);}
++function maxDur(s){return Math.max(2.5,wcount(s)*1.0);}
+ function drag(e,s,mode){
+   e.preventDefault(); e.stopPropagation();
+   const target=e.currentTarget, startX=e.clientX, startY=e.clientY, oldA=s.start, oldB=s.end;
+@@ -201,8 +209,9 @@ function drag(e,s,mode){
+   function move(ev){
+     if(Math.abs(ev.clientX-startX)+Math.abs(ev.clientY-startY)>4) moved=true;
+     const delta=(ev.clientX-startX)*scale;
+-    if(mode==='left') s.start=Math.max(0,Math.min(oldA+delta,oldB-0.1));
+-    else if(mode==='right') s.end=Math.min(duration,Math.max(oldA+0.1,oldB+delta));
++    const floor=minDur(s), ceil=maxDur(s);
++    if(mode==='left') s.start=Math.max(0,oldB-ceil,Math.min(oldA+delta,oldB-floor));
++    else if(mode==='right') s.end=Math.min(duration,Math.min(oldA+ceil,Math.max(oldA+floor,oldB+delta)));
+     else { const len=oldB-oldA; const maxStart=Math.max(0,duration-len); let ns=Math.max(0,Math.min(maxStart,oldA+delta)); s.start=+ns.toFixed(3); s.end=+(ns+len).toFixed(3); }
+     clip.style.left=(s.start/duration*100)+'%';
+     clip.style.width=Math.max(0.8,(s.end-s.start)/duration*100)+'%';
+diff --git a/slack.html b/slack.html
+index 600a0ed..97b0193 100644
+--- a/slack.html
++++ b/slack.html
+@@ -184,13 +184,21 @@ function render(){
+     const speakerInput=document.createElement('input'); speakerInput.className='who'; speakerInput.type='text'; speakerInput.value=s.speaker; speakerInput.setAttribute('aria-label','Speaker '+(i+1));
+     speakerInput.onchange=()=>{s.speaker=speakerInput.value.trim()||'Speaker 1';save();};
+     const times=document.createElement('div'); times.className='times';
+-    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);if(s.end<=s.start)s.end=+(s.start+0.1).toFixed(2);save();};times.append(input);});
++    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);const floor=minDur(s),ceil=maxDur(s),len=s.end-s.start;if(len<floor){if(k==='start')s.start=Math.max(0,+(s.end-floor).toFixed(3));else s.end=+(s.start+floor).toFixed(3);}else if(len>ceil){if(k==='start')s.start=Math.max(0,+(s.end-ceil).toFixed(3));else s.end=Math.min(duration,+(s.start+ceil).toFixed(3));}save();};times.append(input);});
+     const btn=document.createElement('button'); btn.className='segplay'; btn.textContent='▶'; btn.title='Speak segment '+(i+1); btn.onclick=()=>speak(s);
+     const idx=document.createElement('div'); idx.className='muted'; idx.style.fontSize='12px'; idx.textContent='#'+(i+1);
+     row.append(idx,transcript,speakerInput,times,btn); list.append(row);
+   });
+   renderVoiceChoices();
+ }
++// No audio file exists, so a segment's true length is only an approximation
++// from its transcript. The segment hugs its text inside a band: a floor at
++// ~150 wpm (the words need at least this long) and a ceiling at ~60 wpm
++// (slower than this is dead air). Dragging and the time inputs can never
++// push a segment outside that band.
++function wcount(s){return s.text.trim().split(/\s+/).filter(Boolean).length||1;}
++function minDur(s){return Math.max(0.8,wcount(s)*0.4);}
++function maxDur(s){return Math.max(2.5,wcount(s)*1.0);}
+ function drag(e,s,mode){
+   e.preventDefault(); e.stopPropagation();
+   const target=e.currentTarget, startX=e.clientX, startY=e.clientY, oldA=s.start, oldB=s.end;
+@@ -201,8 +209,9 @@ function drag(e,s,mode){
+   function move(ev){
+     if(Math.abs(ev.clientX-startX)+Math.abs(ev.clientY-startY)>4) moved=true;
+     const delta=(ev.clientX-startX)*scale;
+-    if(mode==='left') s.start=Math.max(0,Math.min(oldA+delta,oldB-0.1));
+-    else if(mode==='right') s.end=Math.min(duration,Math.max(oldA+0.1,oldB+delta));
++    const floor=minDur(s), ceil=maxDur(s);
++    if(mode==='left') s.start=Math.max(0,oldB-ceil,Math.min(oldA+delta,oldB-floor));
++    else if(mode==='right') s.end=Math.min(duration,Math.min(oldA+ceil,Math.max(oldA+floor,oldB+delta)));
+     else { const len=oldB-oldA; const maxStart=Math.max(0,duration-len); let ns=Math.max(0,Math.min(maxStart,oldA+delta)); s.start=+ns.toFixed(3); s.end=+(ns+len).toFixed(3); }
+     clip.style.left=(s.start/duration*100)+'%';
+     clip.style.width=Math.max(0.8,(s.end-s.start)/duration*100)+'%';

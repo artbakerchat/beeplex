@@ -1,0 +1,532 @@
+diff --git a/README.md b/README.md
+index 60d104a..c514b75 100644
+--- a/README.md
++++ b/README.md
+@@ -228,6 +228,7 @@ configs.
+ | `read_conversation` | "What exactly did we say in that conversation?" |
+ | `get_todos` | "What are my commitments?" |
+ | `score_conversations` | "How did my conversations go?" |
++| `disagreement_view` | "Where do Bee and beeplex disagree?" |
+ | `generate_report` | "Export my recent conversations" |
+ | `bee_diary` | "Write Bee's diary" |
+ | `user_profile` | "What do you know about me?" / "Refresh my profile" |
+diff --git a/beeplex/cli.py b/beeplex/cli.py
+index 61d2d52..c64a917 100644
+--- a/beeplex/cli.py
++++ b/beeplex/cli.py
+@@ -22,6 +22,11 @@ COMMANDS = {
+     "voice": (None, None, "Open a browser transcript voice editor."),
+     "todos": ("get_todos", 20, "List commitments and action items."),
+     "score": ("score_conversations", 5, "Score recent conversations."),
++    "disagree": (
++        "disagreement_view",
++        10,
++        "Compare Bee's summaries and todos against beeplex's scores.",
++    ),
+     "report": ("generate_report", 10, "Export Office reports and a dashboard."),
+     "diary": ("bee_diary", 3, "Write today's diary."),
+     "profile": ("user_profile", 50, "Read or refresh the saved profile."),
+@@ -189,7 +194,19 @@ def dispatch(args: argparse.Namespace) -> int:
+             else:
+                 function = getattr(server, COMMANDS[args.command][0])
+                 # Direct calls bypass MCP's validation; reuse the tool annotations.
+-                payload = validate_call(function)(**kwargs)
++                view_or_payload = validate_call(function)(**kwargs)
++                if args.command == "disagree":
++                    from .disagreement import render_html
++
++                    items = view_or_payload.get("data") or []
++                    payload = {
++                        **view_or_payload,
++                        "path": render_html(items),
++                        "total": len(items),
++                        "flagged": sum(1 for item in items if item.get("flags")),
++                    }
++                else:
++                    payload = view_or_payload
+     except (BeeError, OSError, ValidationError) as exc:
+         print(f"beeplex: {exc}", file=sys.stderr)
+         return 1
+@@ -227,6 +244,10 @@ def dispatch(args: argparse.Namespace) -> int:
+         elif aggregate.get("error"):
+             print(f"All-recordings editor skipped: {aggregate['error']}")
+         print("Open this HTML file in your browser. Audio uses browser text-to-speech.")
++    elif args.command == "disagree":
++        print(f"Bee vs beeplex disagreement view: {payload['path']}")
++        print(f"{payload['flagged']} of {payload['total']} conversations have flags.")
++        print("Open this HTML file in your browser.")
+     else:
+         print(
+             f"Mode: {payload['mode']}"
+diff --git a/beeplex/disagreement.py b/beeplex/disagreement.py
+new file mode 100644
+index 0000000..f7f54d7
+--- /dev/null
++++ b/beeplex/disagreement.py
+@@ -0,0 +1,433 @@
++"""Bee vs beeplex: the second-reader disagreement view.
++
++Bee's own read surfaces (its AI summary, its suggested todos) are laid next
++to beeplex's independent measurement (engagement, forward motion, tone) per
++conversation, with deterministic flags where the two readers disagree.
++
++Disagreements are the signal of the "beeplex as the second reader" concept:
++Bee's read comes from the CLI (facts/insights/todos/summaries), beeplex's
++measurement is computed from the transcript structure and motion. When they
++diverge, one of them is misreading the conversation.
++
++Flags are observations worth a second look, never verdicts. An empty flag
++list is absence of evidence, not proof of agreement -- the clinical design
++principle applies here too.
++
++This module never touches the clinical extractor.
++"""
++
++import html
++import re
++from datetime import datetime
++
++from .config import DATA_DIR, DEMO
++
++# Thresholds mirror the label cutoffs used across beeplex: >=7 High, >=4
++# Moderate, <4 Low.
++HIGH, LOW = 7, 4
++
++_RESOLVED = (
++    "decided",
++    "agreed",
++    "resolved",
++    "settled",
++    "confirmed",
++    "finalized",
++    "action plan",
++    "next step",
++    "moving forward",
++    "plan is",
++    "will do",
++)
++_UNRESOLVED = (
++    "unresolved",
++    "still open",
++    "tabled",
++    "no decision",
++    "postponed",
++    "revisit",
++    "follow up",
++)
++_DIALOGUE = (
++    "discussed",
++    "debate",
++    "conversation",
++    "exchange",
++    "back and forth",
++    "we talked",
++    "both agreed",
++)
++_QUIET = ("quiet", "brief", "short", "quick check", "nothing much", "uneventful")
++_LIVELY = ("lively", "heated", "energetic", "spirited", "intense", "animated")
++
++
++def _has(text, words):
++    lowered = (text or "").lower()
++    return [w for w in words if w in lowered]
++
++
++def _score(bd, key):
++    node = bd.get(key) or {}
++    return node.get("score")
++
++
++def flag_disagreements(bee_summary, bee_todos, bd):
++    """Compare Bee's read against beeplex's measurement for one conversation.
++
++    ``bee_summary``: Bee's own AI summary text (verbatim, may be empty).
++    ``bee_todos``: list of Bee's suggested todo texts for this conversation.
++    ``bd``: score_breakdown() result for the conversation.
++
++    Returns a list of flags, each a dict with signal, severity
++    ("notable" or "worth_a_look"), bee_says, beeplex_says and detail.
++    """
++    flags = []
++    if not bd or bd.get("engagement") is None:
++        return flags
++    todos = bee_todos or []
++    n = bd.get("n_substantive") or 0
++
++    # 1. Bee claims the conversation settled something; beeplex measured
++    #    low forward motion (circling/spinning).
++    fm = _score(bd, "fm_blended")
++    resolved = _has(bee_summary, _RESOLVED)
++    unresolved = _has(bee_summary, _UNRESOLVED)
++    if fm is not None:
++        if resolved and fm < LOW:
++            flags.append(
++                {
++                    "signal": "resolution_vs_motion",
++                    "severity": "notable",
++                    "bee_says": f"Summary claims resolution ({resolved[0]!r}).",
++                    "beeplex_says": f"Forward motion is Low ({fm}).",
++                    "detail": (
++                        "Bee heard a decision; the transcript shows circling or "
++                        "spinning. Worth re-reading the exchange."
++                    ),
++                }
++            )
++        elif unresolved and fm >= HIGH:
++            flags.append(
++                {
++                    "signal": "resolution_vs_motion",
++                    "severity": "notable",
++                    "bee_says": f"Summary says still open ({unresolved[0]!r}).",
++                    "beeplex_says": f"Forward motion is High ({fm}).",
++                    "detail": (
++                        "Bee heard loose ends; the transcript shows the "
++                        "conversation actually moved. The summary may be stale."
++                    ),
++                }
++            )
++
++    # 2. Bee's tone read (LLM) contradicts beeplex's engagement measurement.
++    tone = ((bd.get("llm") or {}).get("tone"))
++    eng = (bd.get("engagement") or {}).get("score")
++    if tone is not None and eng is not None:
++        if tone >= HIGH and eng < LOW:
++            flags.append(
++                {
++                    "signal": "tone_vs_heat",
++                    "severity": "notable",
++                    "bee_says": f"Tone reads positive ({tone}/10).",
++                    "beeplex_says": f"Engagement is Low ({eng}).",
++                    "detail": (
++                        "Warm words, cold structure: pleasant but thin. "
++                        "Politeness is not engagement."
++                    ),
++                }
++            )
++        elif tone <= LOW and eng >= HIGH:
++            flags.append(
++                {
++                    "signal": "tone_vs_heat",
++                    "severity": "notable",
++                    "bee_says": f"Tone reads negative ({tone}/10).",
++                    "beeplex_says": f"Engagement is High ({eng}).",
++                    "detail": (
++                        "Friction with heat: the disagreement itself was "
++                        "engaging. Negative tone is not the same as a bad "
++                        "conversation."
++                    ),
++                }
++            )
++
++    # 3. Bee proposes actions from a conversation too thin to support them.
++    if len(todos) >= 2 and n <= 4:
++        flags.append(
++            {
++                "signal": "action_inflation",
++                "severity": "worth_a_look",
++                "bee_says": f"Suggested {len(todos)} actions.",
++                "beeplex_says": f"Only {n} substantive turns.",
++                "detail": (
++                    "Bee is manufacturing commitments out of a thin exchange. "
++                    "Check whether these todos were actually earned."
++                ),
++            }
++        )
++
++    # 4. Bee's summary is far longer than the conversation warrants, or
++    #    missing for a conversation that deserved one.
++    words = len(re.findall(r"\S+", bee_summary or ""))
++    if words >= 40 and n <= 4:
++        flags.append(
++            {
++                "signal": "summary_vs_substance",
++                "severity": "worth_a_look",
++                "bee_says": f"{words}-word summary.",
++                "beeplex_says": f"Only {n} substantive turns.",
++                "detail": (
++                    "Bee padded a thin recording with a long summary. "
++                    "The detail may be elaboration, not evidence."
++                ),
++            }
++        )
++    elif not (bee_summary or "").strip() and n >= 10:
++        flags.append(
++            {
++                "signal": "summary_vs_substance",
++                "severity": "worth_a_look",
++                "bee_says": "No summary recorded.",
++                "beeplex_says": f"{n} substantive turns.",
++                "detail": (
++                    "A substantial conversation Bee had nothing to say "
++                    "about. The read may have failed silently."
++                ),
++            }
++        )
++
++    # 5. Bee describes a dialogue; one speaker took almost all the words.
++    shares = bd.get("speaker_shares") or {}
++    if shares and _has(bee_summary, _DIALOGUE):
++        top_speaker, top_share = max(shares.items(), key=lambda kv: kv[1])
++        if top_share >= 0.85:
++            flags.append(
++                {
++                    "signal": "dialogue_vs_monologue",
++                    "severity": "worth_a_look",
++                    "bee_says": "Summary describes a back-and-forth.",
++                    "beeplex_says": (
++                        f"{top_speaker} took {round(top_share * 100)}% of the words."
++                    ),
++                    "detail": (
++                        "Bee heard a conversation; the transcript is a "
++                        "monologue with an audience."
++                    ),
++                }
++            )
++
++    # 6. Bee's energy words contradict beeplex's temporal energy measurement.
++    energy = _score(bd, "energy")
++    if energy is not None:
++        quiet = _has(bee_summary, _QUIET)
++        lively = _has(bee_summary, _LIVELY)
++        if quiet and energy >= HIGH:
++            flags.append(
++                {
++                    "signal": "pace_vs_quiet",
++                    "severity": "worth_a_look",
++                    "bee_says": f"Summary says {quiet[0]!r}.",
++                    "beeplex_says": f"Temporal energy is High ({energy}).",
++                    "detail": (
++                        "Bee heard a quiet moment; the speech pace says "
++                        "otherwise. Fast does not always mean engaged, but "
++                        "it is not quiet."
++                    ),
++                }
++            )
++        elif lively and energy <= LOW:
++            flags.append(
++                {
++                    "signal": "pace_vs_quiet",
++                    "severity": "worth_a_look",
++                    "bee_says": f"Summary says {lively[0]!r}.",
++                    "beeplex_says": f"Temporal energy is Low ({energy}).",
++                    "detail": (
++                        "Bee heard energy; the pace and responsiveness say "
++                        "the room was flat."
++                    ),
++                }
++            )
++
++    return flags
++
++
++def build_view(limit=10):
++    """Build the per-conversation disagreement view for recent conversations.
++
++    Fetches conversations, scores each transcript with score_breakdown(),
++    and lays Bee's own summary and suggested todos next to beeplex's
++    measurement. Returns a JSON-serializable list, newest first.
++    """
++    from . import bee_fetcher as bf
++    from . import bee_sources
++
++    conversations = bf.list_conversations(limit=limit)
++
++    prepared = []
++    for conv in conversations:
++        conv_id = bf._conv_id(conv)
++        source, parts, events = bf._resolve_source(conv)
++        prepared.append((conv_id, source, parts, events))
++    llm_map = bf.llm_engagement_batch(
++        [(str(i), parts) for i, (_, _, parts, _) in enumerate(prepared)],
++        context=bf._scoring_context(),
++    )
++
++    try:
++        sugg = bee_sources.todos_suggestions(limit=50) or {}
++        by_conv = {}
++        for s in sugg.get("suggestions", []):
++            cid = s.get("conversation_id")
++            text = (s.get("text") or "").strip()
++            if cid and text:
++                by_conv.setdefault(str(cid), []).append(text)
++    except Exception:
++        by_conv = {}
++
++    view = []
++    for i, (conv_id, source, parts, events) in enumerate(prepared):
++        llm = llm_map.get(str(i))
++        bd = bf.score_breakdown(parts, events, llm)
++        if bd.get("engagement") is None:
++            continue
++        bee_summary = source.get("summary") or source.get("description") or ""
++        bee_todos = by_conv.get(str(conv_id), []) if conv_id is not None else []
++        flags = flag_disagreements(bee_summary, bee_todos, bd)
++        eng = bd["engagement"]
++        fmb = bd.get("fm_blended")
++        llm_out = bd.get("llm") or {}
++        view.append(
++            {
++                "conversation_id": str(conv_id) if conv_id is not None else None,
++                "title": source.get("title") or source.get("name") or "Untitled",
++                "date": str(bf._recording_date(source) or ""),
++                "bee": {"summary": bee_summary, "todos": bee_todos},
++                "beeplex": {
++                    "engagement": f"{eng['label']} ({eng['score']})",
++                    "forward_motion": (
++                        f"{fmb['label']} ({fmb['score']})" if fmb else "—"
++                    ),
++                    "tone": (
++                        f"{(llm_out.get('tone_label') or '').strip()} "
++                        f"({llm_out.get('tone')}/10)".strip()
++                        if llm_out.get("tone") is not None
++                        else "—"
++                    ),
++                    "n_substantive": bd.get("n_substantive") or 0,
++                },
++                "flags": flags,
++            }
++        )
++    return view
++
++
++_PAGE_STYLE = """
++:root{color-scheme:light dark;--bg:#f7f7f8;--card:#fff;--text:#1a1a1a;--muted:#6b7280;--border:#e5e7eb;--accent:#2563eb;--good:#15803d;--warn:#b45309;--bad:#b91c1c}
++@media (prefers-color-scheme:dark){:root{--bg:#111214;--card:#1b1d20;--text:#e8eaed;--muted:#9aa0a6;--border:#2e3136;--accent:#7aa2f7;--good:#4ade80;--warn:#fbbf24;--bad:#f87171}}
++*{box-sizing:border-box}body{font-family:-apple-system,system-ui,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);margin:0;padding:20px;line-height:1.5}
++.wrap{max-width:960px;margin:0 auto}
++header{margin-bottom:4px}h1{font-size:22px;margin:0}h2{font-size:16px;margin:0 0 6px}
++.meta{color:var(--muted);font-size:13px}
++.banner{background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:10px;padding:10px 14px;margin:12px 0;font-size:14px}
++@media (prefers-color-scheme:dark){.banner{background:#3a2f12;color:#fcd34d;border-color:#6b5518}}
++.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin:12px 0}
++.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:10px 0}
++@media (max-width:640px){.cols{grid-template-columns:1fr}}
++.side{border:1px solid var(--border);border-radius:10px;padding:10px 12px}
++.side h3{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 6px}
++.side p{font-size:14px;margin:4px 0}.side ul{margin:4px 0;padding-left:18px;font-size:14px}.side li{margin:3px 0}
++.tiles{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
++.tile{flex:1 1 130px;border:1px solid var(--border);border-radius:10px;padding:8px 10px}
++.tile .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
++.tile .v{font-size:17px;font-weight:700}
++.pill{display:inline-block;border-radius:12px;padding:1px 10px;font-size:12px;font-weight:600;border:1px solid}
++.hi{color:var(--good);border-color:var(--good)}.md{color:var(--warn);border-color:var(--warn)}.lo{color:var(--bad);border-color:var(--bad)}
++.flag{border-left:3px solid var(--warn);padding:6px 12px;margin:10px 0;font-size:14px}
++.flag.notable{border-color:var(--bad)}
++.flag .sig{font-weight:700}
++.flag .vs{color:var(--muted);font-size:13px;margin:2px 0}
++.flag .det{font-size:13px}
++.quiet{color:var(--muted);font-size:13px;font-style:italic}
++footer{color:var(--muted);font-size:12px;margin:24px 0}
++"""
++
++
++def render_html(view):
++    """Write the disagreement view to DATA_DIR/disagreement.html.
++
++    Returns the file path as a string. Pure presentational layer over the
++    JSON view; safe to regenerate any time.
++    """
++    esc = html.escape
++    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
++    cards = []
++    for item in view:
++        b, p = item["bee"], item["beeplex"]
++        todos = b["todos"]
++        todo_html = (
++            "<ul>" + "".join(f"<li>{esc(t)}</li>" for t in todos) + "</ul>"
++            if todos
++            else '<p class="quiet">Bee suggested no actions.</p>'
++        )
++        summary = esc(b["summary"]) if b["summary"] else '<span class="quiet">No summary recorded.</span>'
++        if item["flags"]:
++            flag_html = "".join(
++                f'<div class="flag {esc(f["severity"])}">'
++                f'<div class="sig">{esc(f["signal"].replace("_", " "))} '
++                f'<span class="pill {"lo" if f["severity"] == "notable" else "md"}">'
++                f'{esc(f["severity"].replace("_", " "))}</span></div>'
++                f'<div class="vs">Bee: {esc(f["bee_says"])}<br>'
++                f'beeplex: {esc(f["beeplex_says"])}</div>'
++                f'<div class="det">{esc(f["detail"])}</div></div>'
++                for f in item["flags"]
++            )
++        else:
++            flag_html = (
++                '<p class="quiet">No disagreements flagged. Absence of flags '
++                "is not proof of agreement.</p>"
++            )
++        cards.append(
++            f'<div class="card"><h2>{esc(item["title"])}</h2>'
++            f'<div class="meta">{esc(item["date"])}'
++            + (f' · {esc(item["conversation_id"])}' if item.get("conversation_id") else "")
++            + f'</div><div class="tiles">'
++            f'<div class="tile"><div class="k">Engagement</div><div class="v">{esc(p["engagement"])}</div></div>'
++            f'<div class="tile"><div class="k">Forward motion</div><div class="v">{esc(p["forward_motion"])}</div></div>'
++            f'<div class="tile"><div class="k">Tone</div><div class="v">{esc(p["tone"])}</div></div>'
++            f'<div class="tile"><div class="k">Substantive turns</div><div class="v">{p["n_substantive"]}</div></div>'
++            f'</div><div class="cols">'
++            f'<div class="side"><h3>Bee\u2019s read</h3><p>{summary}</p>{todo_html}</div>'
++            f'<div class="side"><h3>beeplex\u2019s measurement</h3>'
++            f'<p>Engagement {esc(p["engagement"])}, forward motion {esc(p["forward_motion"])}, '
++            f'tone {esc(p["tone"])} across {p["n_substantive"]} substantive turns.</p></div>'
++            f'</div>{flag_html}</div>'
++        )
++    banner = (
++        '<div class="banner">Demo mode: this page shows clearly-labelled sample '
++        "memories, not real data.</div>"
++        if DEMO
++        else ""
++    )
++    page = f"""<!doctype html>
++<html lang="en">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<title>Bee vs beeplex: disagreement view</title>
++<style>{_PAGE_STYLE}
++</style>
++</head>
++<body><div class="wrap">
++<header><h1>Bee vs beeplex: disagreement view</h1>
++<div class="meta">Generated {esc(stamp)} · {len(view)} conversations · scores are heuristic observations, not assessments</div></header>
++{banner}
++{''.join(cards) if cards else '<p class="quiet">No conversations with scores found.</p>'}
++<footer>Two readers, one transcript. When Bee and beeplex diverge, re-read the conversation.</footer>
++</div></body>
++</html>
++"""
++    path = DATA_DIR / "disagreement.html"
++    path.write_text(page, encoding="utf-8")
++    return str(path)
+diff --git a/beeplex/server.py b/beeplex/server.py
+index 402b3ae..736e3f4 100644
+--- a/beeplex/server.py
++++ b/beeplex/server.py
+@@ -257,6 +257,28 @@ def score_conversations(limit: Limit = 5) -> dict[str, Any]:
+     )
+ 
+ 
++@server.tool(annotations=READ)
++def disagreement_view(limit: Limit = 10) -> dict[str, Any]:
++    """Line up Bee's own summaries and suggested todos against beeplex's
++    engagement and forward-motion scores, per conversation.
++
++    Bee's read comes from the Bee CLI; beeplex's measurement is computed
++    from the transcript structure and motion. When the two readers diverge,
++    one of them misread the conversation. Flags are heuristic observations
++    worth a re-read, not diagnoses.
++    """
++    from .disagreement import build_view
++
++    return result(
++        build_view(limit=limit),
++        interpretation=(
++            "Heuristic comparison of Bee's own summaries and suggested todos "
++            "against beeplex's scores. Flags mark divergence worth re-reading, "
++            "not errors."
++        ),
++    )
++
++
+ @server.tool(annotations=WRITE)
+ def generate_report(limit: Limit = 10) -> dict[str, Any]:
+     """Export recent conversations to Word, Excel, PowerPoint and a dashboard.

@@ -228,6 +228,7 @@ configs.
 | `read_conversation` | "What exactly did we say in that conversation?" |
 | `get_todos` | "What are my commitments?" |
 | `score_conversations` | "How did my conversations go?" |
+| `disagreement_view` | "Where do Bee and beeplex disagree?" |
 | `generate_report` | "Export my recent conversations" |
 | `bee_diary` | "Write Bee's diary" |
 | `user_profile` | "What do you know about me?" / "Refresh my profile" |

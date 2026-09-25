@@ -22,6 +22,11 @@ COMMANDS = {
     "voice": (None, None, "Open a browser transcript voice editor."),
     "todos": ("get_todos", 20, "List commitments and action items."),
     "score": ("score_conversations", 5, "Score recent conversations."),
+    "disagree": (
+        "disagreement_view",
+        10,
+        "Compare Bee's summaries and todos against beeplex's scores.",
+    ),
     "report": ("generate_report", 10, "Export Office reports and a dashboard."),
     "diary": ("bee_diary", 3, "Write today's diary."),
     "profile": ("user_profile", 50, "Read or refresh the saved profile."),
@@ -189,7 +194,19 @@ def dispatch(args: argparse.Namespace) -> int:
             else:
                 function = getattr(server, COMMANDS[args.command][0])
                 # Direct calls bypass MCP's validation; reuse the tool annotations.
-                payload = validate_call(function)(**kwargs)
+                view_or_payload = validate_call(function)(**kwargs)
+                if args.command == "disagree":
+                    from .disagreement import render_html
+
+                    items = view_or_payload.get("data") or []
+                    payload = {
+                        **view_or_payload,
+                        "path": render_html(items),
+                        "total": len(items),
+                        "flagged": sum(1 for item in items if item.get("flags")),
+                    }
+                else:
+                    payload = view_or_payload
     except (BeeError, OSError, ValidationError) as exc:
         print(f"beeplex: {exc}", file=sys.stderr)
         return 1
@@ -227,6 +244,10 @@ def dispatch(args: argparse.Namespace) -> int:
         elif aggregate.get("error"):
             print(f"All-recordings editor skipped: {aggregate['error']}")
         print("Open this HTML file in your browser. Audio uses browser text-to-speech.")
+    elif args.command == "disagree":
+        print(f"Bee vs beeplex disagreement view: {payload['path']}")
+        print(f"{payload['flagged']} of {payload['total']} conversations have flags.")
+        print("Open this HTML file in your browser.")
     else:
         print(
             f"Mode: {payload['mode']}"

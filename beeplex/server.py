@@ -257,6 +257,28 @@ def score_conversations(limit: Limit = 5) -> dict[str, Any]:
     )
 
 
+@server.tool(annotations=READ)
+def disagreement_view(limit: Limit = 10) -> dict[str, Any]:
+    """Line up Bee's own summaries and suggested todos against beeplex's
+    engagement and forward-motion scores, per conversation.
+
+    Bee's read comes from the Bee CLI; beeplex's measurement is computed
+    from the transcript structure and motion. When the two readers diverge,
+    one of them misread the conversation. Flags are heuristic observations
+    worth a re-read, not diagnoses.
+    """
+    from .disagreement import build_view
+
+    return result(
+        build_view(limit=limit),
+        interpretation=(
+            "Heuristic comparison of Bee's own summaries and suggested todos "
+            "against beeplex's scores. Flags mark divergence worth re-reading, "
+            "not errors."
+        ),
+    )
+
+
 @server.tool(annotations=WRITE)
 def generate_report(limit: Limit = 10) -> dict[str, Any]:
     """Export recent conversations to Word, Excel, PowerPoint and a dashboard.

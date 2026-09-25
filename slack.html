@@ -126,7 +126,9 @@ function voiceFor(speaker){return availableVoices.find(v=>v.voiceURI===data.voic
 function save(){try{localStorage.setItem(key,JSON.stringify(data));}catch(e){} render();}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');}
 function render(){
-  duration=Math.max(original.duration,...data.segments.map(s=>s.end),1);
+  // Keep the timeline anchored to the scenario's original duration.  Expanding
+  // it to fit a dragged clip makes the clip appear to barely move.
+  duration=Math.max(original.duration,1);
   document.getElementById('segCount').textContent=data.segments.length+' segments · '+duration.toFixed(1)+'s';
   const ruler=document.getElementById('ruler'); ruler.innerHTML='';
   for(let i=0;i<=10;i++){const t=document.createElement('span');t.className='tick';t.style.left=(i*10)+'%';t.textContent=(duration*i/10).toFixed(1)+'s';ruler.append(t);}
@@ -190,8 +192,8 @@ function drag(e,s,mode){
     if(Math.abs(ev.clientX-startX)+Math.abs(ev.clientY-startY)>4) moved=true;
     const delta=(ev.clientX-startX)*scale;
     if(mode==='left') s.start=Math.max(0,Math.min(oldA+delta,oldB-0.1));
-    else if(mode==='right') s.end=Math.max(oldA+0.1,oldB+delta);
-    else { const len=oldB-oldA; let ns=Math.max(0,oldA+delta); s.start=+ns.toFixed(3); s.end=+(ns+len).toFixed(3); }
+    else if(mode==='right') s.end=Math.min(duration,Math.max(oldA+0.1,oldB+delta));
+    else { const len=oldB-oldA; const maxStart=Math.max(0,duration-len); let ns=Math.max(0,Math.min(maxStart,oldA+delta)); s.start=+ns.toFixed(3); s.end=+(ns+len).toFixed(3); }
     clip.style.left=(s.start/duration*100)+'%';
     clip.style.width=Math.max(0.8,(s.end-s.start)/duration*100)+'%';
   }

@@ -47,7 +47,19 @@ def test_conversational_workflow(tmp_path, demo, protocol):
     async def scenario():
         async with connect(tmp_path, demo=demo, protocol=protocol) as client:
             catalog = {tool.name: tool for tool in (await client.list_tools()).tools}
-            assert len(catalog) == 10
+            assert set(catalog) == {
+                "connection_status",
+                "get_context",
+                "search_memories",
+                "fetch_conversations",
+                "read_conversation",
+                "get_todos",
+                "score_conversations",
+                "disagreement_view",
+                "generate_report",
+                "bee_diary",
+                "user_profile",
+            }
             assert catalog["fetch_conversations"].annotations.read_only_hint
             assert not catalog["generate_report"].annotations.read_only_hint
             schema = catalog["fetch_conversations"].input_schema

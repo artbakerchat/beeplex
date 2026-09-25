@@ -15,7 +15,7 @@ COMMANDS = [
     (["context"], {"data", "window", "has_more"}),
     (["search", "launch"], {"data", "date_timezone"}),
     (["conversations"], {"data", "next_cursor"}),
-    (["read", "mock-conv-1"], {"data", "next_offset", "total_utterances"}),
+    (["read", "sim_template_visit"], {"data", "next_offset", "total_utterances"}),
     (["todos"], {"data"}),
     (["score"], {"data", "detail", "interpretation"}),
     (["report", "--limit", "1"], {"files", "count"}),
@@ -96,9 +96,9 @@ def test_arguments_and_pagination(tmp_path):
     )
     assert json.loads(second.stdout)["data"][0]["id"] != payload["data"][0]["id"]
     read = run_cli(
-        tmp_path, "read", "mock-conv-1", "--offset", "1", "--limit", "1", "--json"
+        tmp_path, "read", "sim_template_visit", "--offset", "1", "--limit", "1", "--json"
     )
-    assert json.loads(read.stdout)["data"]["utterances"][0]["speaker"] == "Priya"
+    assert json.loads(read.stdout)["data"]["utterances"][0]["speaker"] == "Speaker 2"
     search = run_cli(
         tmp_path,
         "search",
@@ -135,7 +135,7 @@ def test_arguments_and_pagination(tmp_path):
     [
         ["context", "--period", "date"],
         ["search", "launch", "--since", "2026-02-30"],
-        ["read", "mock-conv-1", "--offset", "-1"],
+        ["read", "sim_template_visit", "--offset", "-1"],
         ["read", "missing"],
         ["score", "--limit", "51"],
         ["profile", "--full"],

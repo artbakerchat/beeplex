@@ -14,66 +14,64 @@ accepted and ignored (output is always JSON).
 import json
 import sys
 import time
+from pathlib import Path
 
 _NOW_MS = lambda: int(time.time() * 1000)  # noqa: E731
 _HOUR = 3_600_000
+_MINUTE = 60_000
 
 
 # --- sample dataset ------------------------------------------------------
-# Small, coherent, clearly-labelled. Shapes mirror the real Bee CLI.
+# The nine simulator scenarios (simulator/conversations.json) are the single
+# source of truth for demo data -- the same scenarios behind the voice
+# editor's aggregate page and the scoring benchmark. They are served with
+# [MOCK] labels so demo output is never mistaken for real memories.
 
 
 def _conversations():
     now = _NOW_MS()
-    return [
-        {
-            "id": "mock-conv-1",
-            "title": "[MOCK] Sync with Priya",
-            "summary": "[MOCK] Planning session about the launch timeline.",
-            "start_time": now - 2 * _HOUR,
-            "state": "READY",
-            "utterances": [
+    path = Path(__file__).resolve().parent.parent / "simulator" / "conversations.json"
+    try:
+        scenarios = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        scenarios = []
+    conversations = []
+    for s in scenarios if isinstance(scenarios, list) else []:
+        if not isinstance(s, dict):
+            continue
+        utterances = []
+        for u in s.get("utterances") or []:
+            minutes = u.get("minutes_ago")
+            stamp = (
+                now - int(minutes) * _MINUTE
+                if isinstance(minutes, (int, float))
+                else now
+            )
+            utterances.append(
                 {
-                    "speaker": "You",
-                    "text": "[MOCK] So if we move the launch to Thursday we're fine?",
-                    "timestamp": now - 2 * _HOUR,
-                },
-                {
-                    "speaker": "Priya",
-                    "text": "[MOCK] Thursday works, but the demo script needs a rewrite.",
-                    "timestamp": now - 2 * _HOUR + 60_000,
-                },
-            ],
-        },
-        {
-            "id": "mock-conv-2",
-            "title": "[MOCK] Call with the accountant",
-            "summary": "[MOCK] Quarterly taxes and receipt organization.",
-            "start_time": now - 5 * _HOUR,
-            "state": "READY",
-            "utterances": [
-                {
-                    "speaker": "You",
-                    "text": "[MOCK] I still haven't sorted the March receipts.",
-                    "timestamp": now - 5 * _HOUR,
-                },
-            ],
-        },
-        {
-            "id": "mock-conv-3",
-            "title": "[MOCK] Dinner with Sam",
-            "summary": "[MOCK] Catching up; Sam's marathon training.",
-            "start_time": now - 26 * _HOUR,
-            "state": "READY",
-            "utterances": [
-                {
-                    "speaker": "Sam",
-                    "text": "[MOCK] Sixteen kilometers this weekend, easy pace.",
-                    "timestamp": now - 26 * _HOUR,
-                },
-            ],
-        },
-    ]
+                    "speaker": u.get("speaker") or "Speaker 1",
+                    "text": "[MOCK] " + str(u.get("text") or ""),
+                    "timestamp": stamp,
+                }
+            )
+        start_minutes = s.get("minutes_ago")
+        conversations.append(
+            {
+                "id": s.get("id") or "sim-conversation",
+                "title": "[MOCK] " + str(s.get("title") or "Untitled"),
+                "summary": "[MOCK] " + str(s.get("summary") or ""),
+                "start_time": (
+                    now - int(start_minutes) * _MINUTE
+                    if isinstance(start_minutes, (int, float))
+                    else now
+                ),
+                "state": "READY",
+                "utterances": utterances,
+            }
+        )
+    # Newest first, like the real CLI.
+    conversations.sort(key=lambda c: c["start_time"], reverse=True)
+    return conversations
 
 
 def _conv_summaries():
@@ -86,13 +84,13 @@ def _conv_summaries():
 def _todos():
     return [
         {
-            "id": "mock-todo-1",
-            "text": "[MOCK] Rewrite the demo script before Thursday.",
+            "id": "sim-todo-1",
+            "text": "[MOCK] Revisit the holiday plans disagreement.",
             "completed": False,
         },
         {
-            "id": "mock-todo-2",
-            "text": "[MOCK] Sort the March receipts.",
+            "id": "sim-todo-2",
+            "text": "[MOCK] Decide the launch date after the product debate.",
             "completed": False,
         },
     ]
@@ -101,9 +99,9 @@ def _todos():
 def _suggestions():
     return [
         {
-            "id": "mock-sugg-1",
-            "text": "[MOCK] Suggested: ask Priya about the timeline risk.",
-            "conversation_id": "mock-conv-1",
+            "id": "sim-sugg-1",
+            "text": "[MOCK] Suggested: ask about the timeline risk in the launch debate.",
+            "conversation_id": "sim_debate",
         },
     ]
 
@@ -433,7 +431,7 @@ def _changed(positional, argv):
     cursor = _opt(argv, "--cursor")
     return {
         "cursor": cursor,
-        "next_cursor": "mock-cursor-1",
+        "next_cursor": "sim-cursor-1",
         "conversations": _conv_summaries()[:1],
         "facts": _facts()[:1],
         "todos": _todos()[:1],

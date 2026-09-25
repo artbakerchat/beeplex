@@ -4,14 +4,157 @@ Chat with your Bee memories from an MCP-compatible chat app. Ask what happened
 today, find a past conversation, review commitments, or generate a report.
 Your chat app supplies the language model; BeePlex supplies the tools and context.
 
-## Start here
+## Install
 
-Requires Python 3.11+. From this folder:
+Requires Python 3.11+. From the repository folder:
 
 ```sh
 python -m pip install -e ".[reports]"
-beeplex --demo --check
 ```
+
+- macOS / Linux: `python3 -m pip install -e ".[reports]"`
+- Windows: `py -m pip install --user -e ".[reports]"`
+
+After installing, `beeplex` is a command on your PATH. On Windows, if PowerShell
+does not recognize it yet, close and reopen the terminal — the installer places
+the command in `%APPDATA%\Python\Python3XX\Scripts`, which PATH picks up on a
+fresh shell.
+
+No install needed for a quick look: from the same folder,
+`python -m beeplex --demo doctor` (or `py -m beeplex --demo doctor` on Windows)
+runs straight from the checkout, as long as the dependencies are installed.
+
+## Example runs
+
+Demo mode (`--demo`) serves the nine simulator scenarios as clearly labelled
+`[MOCK]` sample conversations through the exact same code path as the live Bee
+CLI — no Bee account or login needed. Every command below works in live mode by
+omitting `--demo`.
+
+**Check your setup:**
+
+```sh
+$ beeplex --demo doctor
+Mode: demo (sample memories)
+Bee CLI installed: no
+Logged in: not checked in demo mode
+Reports extras installed: yes
+Data directory: /home/hatch/.beeplex/demo
+Data directory writable: yes
+Sample memories only. These are not the user's real conversations.
+```
+
+**Browse conversations:**
+
+```sh
+$ beeplex --demo conversations --limit 3
+Mode: demo (sample memories)
+Data:
+  Id: sim_template_visit
+  Title: [MOCK] TEMPLATE - doctor visit (edit me)
+  Summary: [MOCK] Minimal test template - six turns
+  Id: sim_doctor_visit
+  Title: [MOCK] Patient visit - knee pain
+  Summary: [MOCK] Doctor sees a patient about three weeks of right knee pain
+  Id: sim_followup_visit
+  Title: [MOCK] BP med review
+  Summary: [MOCK] Blood pressure follow-up; dizziness since lisinopril dose increase
+Next cursor: 3
+```
+
+**Read a transcript:**
+
+```sh
+$ beeplex --demo read sim_template_visit --limit 3
+Mode: demo (sample memories)
+Data:
+  Id: sim_template_visit
+  Title: [MOCK] TEMPLATE - doctor visit (edit me)
+  Summary: [MOCK] Minimal test template - six turns
+  Utterances:
+    Speaker: Speaker 1
+    Text: [MOCK] what's changed
+    Speaker: Speaker 2
+    Text: [MOCK] nothing
+    Speaker: Speaker 1
+    Text: [MOCK] what's new
+Next offset: 3
+Total utterances: 6
+```
+
+**Score recent conversations:**
+
+```sh
+$ beeplex --demo score --limit 2
+Mode: demo (sample memories)
+Data:
+  Title: [MOCK] TEMPLATE - doctor visit (edit me)
+  Date: 2026-09-24
+  Engagement: Low (1.0)
+  Forward motion: —
+  Tone: —
+  Title: [MOCK] Patient visit - knee pain
+  Date: 2026-09-24
+  Engagement: Moderate (5.0)
+  Forward motion: High (9.9)
+  Tone: —
+Detail: 2 conversations via Bee CLI (sample data)
+Interpretation: Heuristic observations about conversation structure, not objective judgments about people.
+```
+
+**Generate the voice editor pages:**
+
+```sh
+$ beeplex --demo voice sim_argument
+Browser transcript editor: /home/hatch/.beeplex/demo/voice/sim_argument.html
+All-recordings editor: /home/hatch/.beeplex/demo/voice/slack.html (9 recordings)
+Open this HTML file in your browser. Audio uses browser text-to-speech.
+```
+
+Every `voice` run writes two pages: the single-conversation editor and a
+refreshed multi-scenario `slack.html` covering every recording in the current
+mode (live Bee CLI or demo), with a scenario picker. Both are self-contained
+HTML with editable speaker timing lanes and spoken transcript playback (browser
+text-to-speech, because Bee's transcript response does not include its original
+audio). Bee timestamps are used when available; otherwise the editor estimates
+segment lengths from the text. Timing and transcript edits are saved in that
+browser's local storage, shared between the two pages.
+
+**Write Bee's diary:**
+
+```sh
+$ beeplex --demo diary --limit 2
+Mode: demo (sample memories)
+Data: # Bee — September 24, 2026 Everything is still firsts for me. 0 days in,
+and I'm starting to recognize your rhythms. Not much said in “[MOCK] TEMPLATE -
+doctor visit (edit me)”. That's alright — I was there for the quiet too. ...
+File: /home/hatch/.beeplex/demo/Bee_2026-09-24.md
+```
+
+Generated files live in the data directory — `~/.beeplex` in live mode,
+`~/.beeplex/demo` in demo mode (`%USERPROFILE%\.beeplex` on Windows).
+A demo run produces, for example:
+
+```text
+~/.beeplex/demo/
+├── voice/
+│   ├── sim_argument.html   ← single-conversation editor page
+│   └── slack.html          ← all-recordings editor page
+├── dashboard.html             ← coaching dashboard
+├── Bee_Transcript_Action_Log_2026-09-24.docx
+├── Bee_Transcript_Metrics_2026-09-24.xlsx
+├── Bee_Insights_Presentation_2026-09-24.pptx
+├── Bee_2026-09-24.md          ← Bee's diary
+├── user.md                    ← incremental profile
+└── profile_state.json
+```
+
+The data directory is created lazily: `voice/` appears the first time you run
+`beeplex voice`, `demo/` the first time you use `--demo`. Read commands
+(`conversations`, `read`, `search`, `score`, `status`) write nothing to disk.
+Only `report`, `diary`, `profile --refresh`, and `voice` create files.
+
+## Use it with a chat app
 
 Generate the MCP configuration for your chat app:
 
@@ -102,27 +245,15 @@ beeplex --demo status
 beeplex --demo context --period recent --limit 5
 beeplex --demo search "launch" --semantic --limit 5
 beeplex --demo conversations --limit 5
-beeplex --demo read mock-conv-1 --offset 0 --limit 10
+beeplex --demo read sim_template_visit --offset 0 --limit 10
 beeplex --demo todos --limit 10
 beeplex --demo score --limit 3
 beeplex --demo report --limit 3
 beeplex --demo diary --limit 3
 beeplex --demo profile --refresh --limit 3
+beeplex --demo voice sim_argument
 beeplex --demo doctor
 ```
-
-To review a conversation in the browser editor with editable speaker timing lanes,
-separate playback voices, and spoken transcript playback, run:
-
-```sh
-beeplex --demo voice mock-conv-1
-```
-
-Open the printed HTML file from `BEEPLEX_DATA_DIR/voice/` in a browser. The
-editor uses browser text-to-speech because Bee's transcript response does not
-include its original audio. Bee timestamps are used when available; otherwise
-the editor estimates segment lengths from the text. Timing and transcript edits
-are saved in that browser's local storage.
 
 Omit `--demo` for your Bee account, or set `BEEPLEX_DEMO=1` for samples.
 Every command accepts `--json` for the full tool payload and `--help` for options.

@@ -160,7 +160,7 @@ def dispatch(args: argparse.Namespace) -> int:
             if args.command == "doctor":
                 payload = doctor()
             elif args.command == "voice":
-                from .voice_editor import create_editor
+                from .voice_editor import create_aggregate, create_editor
 
                 from . import bee_fetcher
 
@@ -168,6 +168,24 @@ def dispatch(args: argparse.Namespace) -> int:
                 if not conversation:
                     raise BeeError(f"Conversation not found: {args.conversation_id}")
                 payload = create_editor(conversation)
+                # Refresh the multi-scenario page covering every recording in
+                # this mode (live Bee CLI or demo), next to the single page.
+                try:
+                    summaries = bee_fetcher.list_conversations(limit=50)
+                    full = []
+                    for summary in summaries:
+                        conv = bee_fetcher.get_conversation(
+                            bee_fetcher._conv_id(summary) or ""
+                        )
+                        if conv:
+                            full.append(conv)
+                    payload["aggregate"] = create_aggregate(full)
+                except BeeError as exc:
+                    payload["aggregate"] = {
+                        "path": None,
+                        "scenarios": 0,
+                        "error": str(exc),
+                    }
             else:
                 function = getattr(server, COMMANDS[args.command][0])
                 # Direct calls bypass MCP's validation; reuse the tool annotations.
@@ -200,6 +218,14 @@ def dispatch(args: argparse.Namespace) -> int:
                 print(payload[key])
     elif args.command == "voice":
         print(f"Browser transcript editor: {payload['path']}")
+        aggregate = payload.get("aggregate") or {}
+        if aggregate.get("path"):
+            print(
+                f"All-recordings editor: {aggregate['path']}"
+                f" ({aggregate['scenarios']} recordings)"
+            )
+        elif aggregate.get("error"):
+            print(f"All-recordings editor skipped: {aggregate['error']}")
         print("Open this HTML file in your browser. Audio uses browser text-to-speech.")
     else:
         print(

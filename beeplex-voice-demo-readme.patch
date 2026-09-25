@@ -1,0 +1,716 @@
+diff --git a/README.md b/README.md
+index 814f02b..60d104a 100644
+--- a/README.md
++++ b/README.md
+@@ -4,15 +4,158 @@ Chat with your Bee memories from an MCP-compatible chat app. Ask what happened
+ today, find a past conversation, review commitments, or generate a report.
+ Your chat app supplies the language model; BeePlex supplies the tools and context.
+ 
+-## Start here
++## Install
+ 
+-Requires Python 3.11+. From this folder:
++Requires Python 3.11+. From the repository folder:
+ 
+ ```sh
+ python -m pip install -e ".[reports]"
+-beeplex --demo --check
+ ```
+ 
++- macOS / Linux: `python3 -m pip install -e ".[reports]"`
++- Windows: `py -m pip install --user -e ".[reports]"`
++
++After installing, `beeplex` is a command on your PATH. On Windows, if PowerShell
++does not recognize it yet, close and reopen the terminal — the installer places
++the command in `%APPDATA%\Python\Python3XX\Scripts`, which PATH picks up on a
++fresh shell.
++
++No install needed for a quick look: from the same folder,
++`python -m beeplex --demo doctor` (or `py -m beeplex --demo doctor` on Windows)
++runs straight from the checkout, as long as the dependencies are installed.
++
++## Example runs
++
++Demo mode (`--demo`) serves the nine simulator scenarios as clearly labelled
++`[MOCK]` sample conversations through the exact same code path as the live Bee
++CLI — no Bee account or login needed. Every command below works in live mode by
++omitting `--demo`.
++
++**Check your setup:**
++
++```sh
++$ beeplex --demo doctor
++Mode: demo (sample memories)
++Bee CLI installed: no
++Logged in: not checked in demo mode
++Reports extras installed: yes
++Data directory: /home/hatch/.beeplex/demo
++Data directory writable: yes
++Sample memories only. These are not the user's real conversations.
++```
++
++**Browse conversations:**
++
++```sh
++$ beeplex --demo conversations --limit 3
++Mode: demo (sample memories)
++Data:
++  Id: sim_template_visit
++  Title: [MOCK] TEMPLATE - doctor visit (edit me)
++  Summary: [MOCK] Minimal test template - six turns
++  Id: sim_doctor_visit
++  Title: [MOCK] Patient visit - knee pain
++  Summary: [MOCK] Doctor sees a patient about three weeks of right knee pain
++  Id: sim_followup_visit
++  Title: [MOCK] BP med review
++  Summary: [MOCK] Blood pressure follow-up; dizziness since lisinopril dose increase
++Next cursor: 3
++```
++
++**Read a transcript:**
++
++```sh
++$ beeplex --demo read sim_template_visit --limit 3
++Mode: demo (sample memories)
++Data:
++  Id: sim_template_visit
++  Title: [MOCK] TEMPLATE - doctor visit (edit me)
++  Summary: [MOCK] Minimal test template - six turns
++  Utterances:
++    Speaker: Speaker 1
++    Text: [MOCK] what's changed
++    Speaker: Speaker 2
++    Text: [MOCK] nothing
++    Speaker: Speaker 1
++    Text: [MOCK] what's new
++Next offset: 3
++Total utterances: 6
++```
++
++**Score recent conversations:**
++
++```sh
++$ beeplex --demo score --limit 2
++Mode: demo (sample memories)
++Data:
++  Title: [MOCK] TEMPLATE - doctor visit (edit me)
++  Date: 2026-09-24
++  Engagement: Low (1.0)
++  Forward motion: —
++  Tone: —
++  Title: [MOCK] Patient visit - knee pain
++  Date: 2026-09-24
++  Engagement: Moderate (5.0)
++  Forward motion: High (9.9)
++  Tone: —
++Detail: 2 conversations via Bee CLI (sample data)
++Interpretation: Heuristic observations about conversation structure, not objective judgments about people.
++```
++
++**Generate the voice editor pages:**
++
++```sh
++$ beeplex --demo voice sim_argument
++Browser transcript editor: /home/hatch/.beeplex/demo/voice/sim_argument.html
++All-recordings editor: /home/hatch/.beeplex/demo/voice/slack.html (9 recordings)
++Open this HTML file in your browser. Audio uses browser text-to-speech.
++```
++
++Every `voice` run writes two pages: the single-conversation editor and a
++refreshed multi-scenario `slack.html` covering every recording in the current
++mode (live Bee CLI or demo), with a scenario picker. Both are self-contained
++HTML with editable speaker timing lanes and spoken transcript playback (browser
++text-to-speech, because Bee's transcript response does not include its original
++audio). Bee timestamps are used when available; otherwise the editor estimates
++segment lengths from the text. Timing and transcript edits are saved in that
++browser's local storage, shared between the two pages.
++
++**Write Bee's diary:**
++
++```sh
++$ beeplex --demo diary --limit 2
++Mode: demo (sample memories)
++Data: # Bee — September 24, 2026 Everything is still firsts for me. 0 days in,
++and I'm starting to recognize your rhythms. Not much said in “[MOCK] TEMPLATE -
++doctor visit (edit me)”. That's alright — I was there for the quiet too. ...
++File: /home/hatch/.beeplex/demo/Bee_2026-09-24.md
++```
++
++Generated files live in the data directory — `~/.beeplex` in live mode,
++`~/.beeplex/demo` in demo mode (`%USERPROFILE%\.beeplex` on Windows).
++A demo run produces, for example:
++
++```text
++~/.beeplex/demo/
++├── voice/
++│   ├── sim_argument.html   ← single-conversation editor page
++│   └── slack.html          ← all-recordings editor page
++├── dashboard.html             ← coaching dashboard
++├── Bee_Transcript_Action_Log_2026-09-24.docx
++├── Bee_Transcript_Metrics_2026-09-24.xlsx
++├── Bee_Insights_Presentation_2026-09-24.pptx
++├── Bee_2026-09-24.md          ← Bee's diary
++├── user.md                    ← incremental profile
++└── profile_state.json
++```
++
++The data directory is created lazily: `voice/` appears the first time you run
++`beeplex voice`, `demo/` the first time you use `--demo`. Read commands
++(`conversations`, `read`, `search`, `score`, `status`) write nothing to disk.
++Only `report`, `diary`, `profile --refresh`, and `voice` create files.
++
++## Use it with a chat app
++
+ Generate the MCP configuration for your chat app:
+ 
+ ```sh
+@@ -102,28 +245,16 @@ beeplex --demo status
+ beeplex --demo context --period recent --limit 5
+ beeplex --demo search "launch" --semantic --limit 5
+ beeplex --demo conversations --limit 5
+-beeplex --demo read mock-conv-1 --offset 0 --limit 10
++beeplex --demo read sim_template_visit --offset 0 --limit 10
+ beeplex --demo todos --limit 10
+ beeplex --demo score --limit 3
+ beeplex --demo report --limit 3
+ beeplex --demo diary --limit 3
+ beeplex --demo profile --refresh --limit 3
++beeplex --demo voice sim_argument
+ beeplex --demo doctor
+ ```
+ 
+-To review a conversation in the browser editor with editable speaker timing lanes,
+-separate playback voices, and spoken transcript playback, run:
+-
+-```sh
+-beeplex --demo voice mock-conv-1
+-```
+-
+-Open the printed HTML file from `BEEPLEX_DATA_DIR/voice/` in a browser. The
+-editor uses browser text-to-speech because Bee's transcript response does not
+-include its original audio. Bee timestamps are used when available; otherwise
+-the editor estimates segment lengths from the text. Timing and transcript edits
+-are saved in that browser's local storage.
+-
+ Omit `--demo` for your Bee account, or set `BEEPLEX_DEMO=1` for samples.
+ Every command accepts `--json` for the full tool payload and `--help` for options.
+ Use `context --period date --date-str YYYY-MM-DD` for a dated summary;
+diff --git a/beeplex/cli.py b/beeplex/cli.py
+index 899d6d5..61d2d52 100644
+--- a/beeplex/cli.py
++++ b/beeplex/cli.py
+@@ -160,7 +160,7 @@ def dispatch(args: argparse.Namespace) -> int:
+             if args.command == "doctor":
+                 payload = doctor()
+             elif args.command == "voice":
+-                from .voice_editor import create_editor
++                from .voice_editor import create_aggregate, create_editor
+ 
+                 from . import bee_fetcher
+ 
+@@ -168,6 +168,24 @@ def dispatch(args: argparse.Namespace) -> int:
+                 if not conversation:
+                     raise BeeError(f"Conversation not found: {args.conversation_id}")
+                 payload = create_editor(conversation)
++                # Refresh the multi-scenario page covering every recording in
++                # this mode (live Bee CLI or demo), next to the single page.
++                try:
++                    summaries = bee_fetcher.list_conversations(limit=50)
++                    full = []
++                    for summary in summaries:
++                        conv = bee_fetcher.get_conversation(
++                            bee_fetcher._conv_id(summary) or ""
++                        )
++                        if conv:
++                            full.append(conv)
++                    payload["aggregate"] = create_aggregate(full)
++                except BeeError as exc:
++                    payload["aggregate"] = {
++                        "path": None,
++                        "scenarios": 0,
++                        "error": str(exc),
++                    }
+             else:
+                 function = getattr(server, COMMANDS[args.command][0])
+                 # Direct calls bypass MCP's validation; reuse the tool annotations.
+@@ -200,6 +218,14 @@ def dispatch(args: argparse.Namespace) -> int:
+                 print(payload[key])
+     elif args.command == "voice":
+         print(f"Browser transcript editor: {payload['path']}")
++        aggregate = payload.get("aggregate") or {}
++        if aggregate.get("path"):
++            print(
++                f"All-recordings editor: {aggregate['path']}"
++                f" ({aggregate['scenarios']} recordings)"
++            )
++        elif aggregate.get("error"):
++            print(f"All-recordings editor skipped: {aggregate['error']}")
+         print("Open this HTML file in your browser. Audio uses browser text-to-speech.")
+     else:
+         print(
+diff --git a/beeplex/demo_cli.py b/beeplex/demo_cli.py
+index a9d6d78..767321a 100644
+--- a/beeplex/demo_cli.py
++++ b/beeplex/demo_cli.py
+@@ -14,66 +14,64 @@ accepted and ignored (output is always JSON).
+ import json
+ import sys
+ import time
++from pathlib import Path
+ 
+ _NOW_MS = lambda: int(time.time() * 1000)  # noqa: E731
+ _HOUR = 3_600_000
++_MINUTE = 60_000
+ 
+ 
+ # --- sample dataset ------------------------------------------------------
+-# Small, coherent, clearly-labelled. Shapes mirror the real Bee CLI.
++# The nine simulator scenarios (simulator/conversations.json) are the single
++# source of truth for demo data -- the same scenarios behind the voice
++# editor's aggregate page and the scoring benchmark. They are served with
++# [MOCK] labels so demo output is never mistaken for real memories.
+ 
+ 
+ def _conversations():
+     now = _NOW_MS()
+-    return [
+-        {
+-            "id": "mock-conv-1",
+-            "title": "[MOCK] Sync with Priya",
+-            "summary": "[MOCK] Planning session about the launch timeline.",
+-            "start_time": now - 2 * _HOUR,
+-            "state": "READY",
+-            "utterances": [
+-                {
+-                    "speaker": "You",
+-                    "text": "[MOCK] So if we move the launch to Thursday we're fine?",
+-                    "timestamp": now - 2 * _HOUR,
+-                },
+-                {
+-                    "speaker": "Priya",
+-                    "text": "[MOCK] Thursday works, but the demo script needs a rewrite.",
+-                    "timestamp": now - 2 * _HOUR + 60_000,
+-                },
+-            ],
+-        },
+-        {
+-            "id": "mock-conv-2",
+-            "title": "[MOCK] Call with the accountant",
+-            "summary": "[MOCK] Quarterly taxes and receipt organization.",
+-            "start_time": now - 5 * _HOUR,
+-            "state": "READY",
+-            "utterances": [
+-                {
+-                    "speaker": "You",
+-                    "text": "[MOCK] I still haven't sorted the March receipts.",
+-                    "timestamp": now - 5 * _HOUR,
+-                },
+-            ],
+-        },
+-        {
+-            "id": "mock-conv-3",
+-            "title": "[MOCK] Dinner with Sam",
+-            "summary": "[MOCK] Catching up; Sam's marathon training.",
+-            "start_time": now - 26 * _HOUR,
+-            "state": "READY",
+-            "utterances": [
++    path = Path(__file__).resolve().parent.parent / "simulator" / "conversations.json"
++    try:
++        scenarios = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, ValueError):
++        scenarios = []
++    conversations = []
++    for s in scenarios if isinstance(scenarios, list) else []:
++        if not isinstance(s, dict):
++            continue
++        utterances = []
++        for u in s.get("utterances") or []:
++            minutes = u.get("minutes_ago")
++            stamp = (
++                now - int(minutes) * _MINUTE
++                if isinstance(minutes, (int, float))
++                else now
++            )
++            utterances.append(
+                 {
+-                    "speaker": "Sam",
+-                    "text": "[MOCK] Sixteen kilometers this weekend, easy pace.",
+-                    "timestamp": now - 26 * _HOUR,
+-                },
+-            ],
+-        },
+-    ]
++                    "speaker": u.get("speaker") or "Speaker 1",
++                    "text": "[MOCK] " + str(u.get("text") or ""),
++                    "timestamp": stamp,
++                }
++            )
++        start_minutes = s.get("minutes_ago")
++        conversations.append(
++            {
++                "id": s.get("id") or "sim-conversation",
++                "title": "[MOCK] " + str(s.get("title") or "Untitled"),
++                "summary": "[MOCK] " + str(s.get("summary") or ""),
++                "start_time": (
++                    now - int(start_minutes) * _MINUTE
++                    if isinstance(start_minutes, (int, float))
++                    else now
++                ),
++                "state": "READY",
++                "utterances": utterances,
++            }
++        )
++    # Newest first, like the real CLI.
++    conversations.sort(key=lambda c: c["start_time"], reverse=True)
++    return conversations
+ 
+ 
+ def _conv_summaries():
+@@ -86,13 +84,13 @@ def _conv_summaries():
+ def _todos():
+     return [
+         {
+-            "id": "mock-todo-1",
+-            "text": "[MOCK] Rewrite the demo script before Thursday.",
++            "id": "sim-todo-1",
++            "text": "[MOCK] Revisit the holiday plans disagreement.",
+             "completed": False,
+         },
+         {
+-            "id": "mock-todo-2",
+-            "text": "[MOCK] Sort the March receipts.",
++            "id": "sim-todo-2",
++            "text": "[MOCK] Decide the launch date after the product debate.",
+             "completed": False,
+         },
+     ]
+@@ -101,9 +99,9 @@ def _todos():
+ def _suggestions():
+     return [
+         {
+-            "id": "mock-sugg-1",
+-            "text": "[MOCK] Suggested: ask Priya about the timeline risk.",
+-            "conversation_id": "mock-conv-1",
++            "id": "sim-sugg-1",
++            "text": "[MOCK] Suggested: ask about the timeline risk in the launch debate.",
++            "conversation_id": "sim_debate",
+         },
+     ]
+ 
+@@ -433,7 +431,7 @@ def _changed(positional, argv):
+     cursor = _opt(argv, "--cursor")
+     return {
+         "cursor": cursor,
+-        "next_cursor": "mock-cursor-1",
++        "next_cursor": "sim-cursor-1",
+         "conversations": _conv_summaries()[:1],
+         "facts": _facts()[:1],
+         "todos": _todos()[:1],
+diff --git a/beeplex/voice_editor.py b/beeplex/voice_editor.py
+index 41b950b..a8b3fd3 100644
+--- a/beeplex/voice_editor.py
++++ b/beeplex/voice_editor.py
+@@ -87,3 +87,269 @@ function drag(e,s,mode){e.preventDefault();e.stopPropagation();let target=e.curr
+ function speak(s){speechSynthesis.cancel();let u=new SpeechSynthesisUtterance(s.text);u.voice=voiceFor(s.speaker);u.rate=Number(document.getElementById('rate').value);speechSynthesis.speak(u);document.getElementById('status').textContent=s.speaker+': '+s.text}
+ function stop(){playing=false;clearTimeout(timer);speechSynthesis.cancel();document.getElementById('play').textContent='▶ Play all'}function playNext(){if(!playing)return;let s=data.segments.find(x=>x.start>=playhead-.02);if(!s){stop();return}playhead=s.start;render();let u=new SpeechSynthesisUtterance(s.text);u.voice=voiceFor(s.speaker);u.rate=Number(document.getElementById('rate').value);document.getElementById('status').textContent=s.speaker+': '+s.text;u.onend=()=>{playhead=s.end;render();timer=setTimeout(playNext,Math.max(0,(s.end-s.start)*300))};speechSynthesis.speak(u)}document.getElementById('play').onclick=()=>{stop();playing=true;document.getElementById('play').textContent='❚❚ Playing';playNext()};document.getElementById('stop').onclick=stop;render();
+ </script></body></html>'''
++
++
++_ALL_PAGE = r"""<!doctype html>
++<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
++<title>__TITLE__</title>
++<style>
++:root{color-scheme:light;--bg:#fff;--panel:#fff;--line:#d9dee5;--text:#20252b;--muted:#68717d;--blue:#2878bd;--green:#21865e;--amber:#d98a00}
++*{box-sizing:border-box}
++body{margin:0;background:#fff;color:var(--text);font:15px/1.45 system-ui,sans-serif}
++main{max-width:1100px;margin:auto;padding:24px 16px}
++h1{font-size:22px;margin:0 0 4px;line-height:1.3}
++.muted{color:var(--muted)}
++.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:16px}
++.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
++.toolbar select,.toolbar input[type=range]{max-width:100%}
++select,input[type=text],input[type=number]{font:inherit}
++button{background:#f3f5f7;color:var(--text);border:1px solid #cbd2da;border-radius:8px;padding:9px 13px;cursor:pointer;min-height:40px}
++button:hover{border-color:var(--blue)}
++.pickrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
++.pickrow select{background:#fff;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px;max-width:100%;flex:1;min-width:200px}
++.summary{font-size:13px;color:var(--muted);margin-top:8px}
++.tracks{overflow-x:auto;-webkit-overflow-scrolling:touch}
++.ruler{position:relative;height:26px;margin-left:96px;border-bottom:1px solid var(--line);color:var(--muted);font-size:11px;min-width:0}
++.tick{position:absolute;bottom:2px;transform:translateX(-50%);white-space:nowrap}
++.lane{display:flex;align-items:stretch;border-bottom:1px solid #e5e8ec;padding:6px 0;gap:0}
++.speaker{width:96px;flex:none;color:var(--blue);font-weight:600;padding:18px 8px 18px 0;font-size:13px;word-break:break-word}
++.timeline{position:relative;height:64px;flex:1;min-width:0;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(10% - 1px),#e5e8ec calc(10% - 1px),#e5e8ec 10%);border-radius:8px;touch-action:pan-y}
++.clip{position:absolute;top:10px;height:44px;border-radius:8px;background:#23507b;border:1px solid #509be0;cursor:grab;overflow:hidden;min-width:10px;touch-action:none;user-select:none;-webkit-user-select:none}
++.clip .wave{position:absolute;inset:0;display:flex;align-items:center;justify-content:space-around;gap:2px;padding:4px 6px;opacity:.28;pointer-events:none}
++.bar{width:2px;background:#d4e9ff;border-radius:2px;flex:none}
++.clip .ctext{position:absolute;inset:0;display:flex;align-items:center;padding:0 10px;font-size:12px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;color:#fff}
++.handle{position:absolute;top:0;bottom:0;width:14px;cursor:ew-resize;z-index:3;touch-action:none}
++.handle.left{left:0}.handle.right{right:0}
++.handle::after{content:"";position:absolute;top:8px;bottom:8px;left:5px;width:3px;border-radius:2px;background:rgba(255,255,255,.55)}
++.playhead{position:absolute;top:0;bottom:0;width:2px;background:var(--amber);z-index:4;pointer-events:none}
++.list{display:grid;gap:10px}
++.item{display:grid;grid-template-columns:110px 1fr auto;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff}
++.item.segment-focus{outline:2px solid var(--blue);outline-offset:2px}
++.item .who{background:#fff;border:1px solid var(--line);border-radius:7px;color:var(--text);padding:9px;width:100%}
++.item .txt{background:#fff;border:1px solid var(--line);border-radius:7px;color:var(--text);padding:9px;width:100%}
++.times{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
++.times input{width:74px;background:#fff;color:var(--text);border:1px solid var(--line);padding:8px;border-radius:6px}
++.segplay{flex:none}
++.footer{font-size:12px;color:var(--muted);margin-top:14px}
++.count{font-size:12px;color:var(--muted)}
++@media(max-width:700px){
++  main{padding:16px 10px}
++  h1{font-size:19px}
++  .panel{padding:12px;border-radius:12px}
++  .ruler{margin-left:72px}
++  .speaker{width:72px;font-size:12px;padding:16px 6px 16px 0}
++  .timeline{height:60px}
++  .clip{top:8px;height:44px}
++  .clip .ctext{font-size:11px;padding:0 8px}
++  .item{grid-template-columns:1fr;gap:8px}
++  .item .rowline{display:flex;gap:8px}
++  .item .rowline .who{flex:1}
++  .times input{width:70px;flex:1}
++  button{min-height:44px}
++}
++</style>
++<body><main>
++<h1>Bee voice transcript editor</h1>
++<div class="muted">__SUBTITLE__</div>
++<div class="pickrow">
++  <label class="muted" for="scenarioPick">Scenario</label>
++  <select id="scenarioPick"></select>
++  <span class="count" id="segCount"></span>
++</div>
++<div class="summary" id="scenarioSummary"></div>
++<section class="panel">
++  <div class="toolbar">
++    <button id="play">▶ Play all</button>
++    <button id="stop">■ Stop</button>
++    <div id="speakerVoices" class="toolbar" aria-label="Voice for each speaker"></div>
++    <label class="muted">Rate <input id="rate" type="range" min="0.65" max="1.4" step="0.05" value="1"></label>
++    <span class="muted" id="status">Pick a scenario, then tap a segment to hear it.</span>
++  </div>
++  <div class="tracks" style="margin-top:14px"><div id="ruler" class="ruler"></div><div id="lanes"></div></div>
++  <div class="footer">Bee's original recording is not included in this transcript response. Playback uses your browser's speech synthesis; segment lengths are editable estimates. Edits are saved per-scenario in this browser's local storage.</div>
++</section>
++<section class="panel"><h2 style="font-size:16px;margin:0 0 10px">Transcript and timing</h2><div id="list" class="list"></div></section>
++</main>
++<script>
++const SCENARIOS=__DATA__;
++const pick=document.getElementById('scenarioPick');
++SCENARIOS.forEach((s,i)=>{const o=document.createElement('option');o.value=s.id;o.textContent=(i+1)+'. '+s.title;pick.append(o);});
++let sIdx=0, original=SCENARIOS[0], data=null, key='', duration=1, playhead=0, playing=false, timer=null;
++let lastClipPointer=null, pendingSegmentFocus=null;
++const colors=['#6bb7ff','#53d6a0','#d59cff','#ff927d','#f1bc55','#7dd3fc','#f0abfc'];
++function focusSegment(s){
++  const row=[...document.querySelectorAll('.item')].find(item=>item.dataset.segmentId===String(s.id));
++  if(!row)return;
++  row.scrollIntoView({behavior:'instant',block:'center'});
++  row.classList.add('segment-focus');setTimeout(()=>row.classList.remove('segment-focus'),1400);
++  const transcript=row.querySelector('.who');
++  if(transcript){transcript.focus({preventScroll:true});transcript.setSelectionRange(0,transcript.value.length);}
++}
++function loadScenario(idx){
++  stop();
++  sIdx=idx; original=SCENARIOS[idx]; key='beeplex-voice-'+original.id;
++  let saved=null; try{saved=JSON.parse(localStorage.getItem(key)||'null');}catch(e){}
++  data=(saved && saved.id===original.id && Array.isArray(saved.segments))?saved:JSON.parse(JSON.stringify(original));
++  data.voiceBySpeaker=data.voiceBySpeaker||{};
++  playhead=0;
++  document.getElementById('scenarioSummary').textContent=original.summary||'';
++  document.getElementById('segCount').textContent=data.segments.length+' segments · '+data.duration.toFixed(1)+'s';
++  render();
++}
++pick.onchange=()=>loadScenario(pick.selectedIndex);
++let availableVoices=[];
++function loadVoices(){try{availableVoices=speechSynthesis.getVoices();}catch(e){availableVoices=[];}renderVoiceChoices();}
++if('speechSynthesis' in window){loadVoices();speechSynthesis.onvoiceschanged=loadVoices;}
++function renderVoiceChoices(){
++  const box=document.getElementById('speakerVoices'); if(!box||!data)return;
++  box.innerHTML='';
++  [...new Set(data.segments.map(s=>s.speaker))].forEach(speaker=>{
++    const label=document.createElement('label'); label.className='muted'; label.textContent=speaker+' ';
++    const select=document.createElement('select'); select.setAttribute('aria-label',speaker+' voice');
++    const automatic=document.createElement('option'); automatic.value=''; automatic.textContent='Default voice'; select.append(automatic);
++    availableVoices.forEach(v=>{const option=document.createElement('option');option.value=v.voiceURI;option.textContent=v.name+' ('+v.lang+')';select.append(option);});
++    select.value=data.voiceBySpeaker?.[speaker]||'';
++    select.onchange=()=>{data.voiceBySpeaker=data.voiceBySpeaker||{};data.voiceBySpeaker[speaker]=select.value;try{localStorage.setItem(key,JSON.stringify(data));}catch(e){}};
++    label.append(select);box.append(label);
++  });
++}
++function voiceFor(speaker){return availableVoices.find(v=>v.voiceURI===data.voiceBySpeaker?.[speaker])||null;}
++function save(){try{localStorage.setItem(key,JSON.stringify(data));}catch(e){} render();}
++function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');}
++function render(){
++  duration=Math.max(original.duration,...data.segments.map(s=>s.end),1);
++  document.getElementById('segCount').textContent=data.segments.length+' segments · '+duration.toFixed(1)+'s';
++  const ruler=document.getElementById('ruler'); ruler.innerHTML='';
++  for(let i=0;i<=10;i++){const t=document.createElement('span');t.className='tick';t.style.left=(i*10)+'%';t.textContent=(duration*i/10).toFixed(1)+'s';ruler.append(t);}
++  const lanes=document.getElementById('lanes'); lanes.innerHTML='';
++  let speakers=[...new Set(data.segments.map(s=>s.speaker))]; if(!speakers.length)speakers=['Speaker 1'];
++  speakers.forEach((speaker,si)=>{
++    const row=document.createElement('div'); row.className='lane';
++    const name=document.createElement('div'); name.className='speaker'; name.textContent=speaker; name.style.color=colors[si%colors.length];
++    const tl=document.createElement('div'); tl.className='timeline'; tl.dataset.lane=speaker;
++    data.segments.filter(s=>s.speaker===speaker).forEach(s=>{
++      const clip=document.createElement('div'); clip.className='clip';
++      clip.style.left=(s.start/duration*100)+'%';
++      clip.style.width=Math.max(0.8,(s.end-s.start)/duration*100)+'%';
++      clip.style.background=colors[si%colors.length]+'33';
++      clip.style.borderColor=colors[si%colors.length];
++      clip.title=s.speaker+': '+s.text;
++      const wave=document.createElement('div'); wave.className='wave';
++      const bars=Math.max(8,Math.min(28,Math.round(clip.clientWidth/8)||18));
++      for(let n=0;n<24;n++){const b=document.createElement('i');b.className='bar';const ch=s.text.length?s.text.charCodeAt(n%s.text.length):65;b.style.height=(20+((ch*13+n*7)%60))+'%';wave.append(b);}
++      const ct=document.createElement('div'); ct.className='ctext'; ct.textContent=s.text;
++      clip.append(wave,ct);
++      ['left','right'].forEach(side=>{const h=document.createElement('i');h.className='handle '+side;clip.append(h);h.addEventListener('pointerdown',e=>drag(e,s,side));});
++      clip.addEventListener('pointerdown',e=>{
++        if(e.target.classList.contains('handle'))return;
++        const now=Date.now();
++        if(lastClipPointer&&lastClipPointer.id===String(s.id)&&now-lastClipPointer.time<500){pendingSegmentFocus=String(s.id);lastClipPointer=null;}
++        else lastClipPointer={id:String(s.id),time:now};
++        drag(e,s,'move');
++      });
++      clip.addEventListener('click',e=>{if(e.detail===1 && !clip._moved){/* single tap = seek+speak on mobile */}});
++      tl.append(clip);
++    });
++    const line=document.createElement('div'); line.className='playhead'; line.style.left=(playhead/duration*100)+'%'; tl.append(line);
++    tl.addEventListener('click',e=>{if(e.target===tl){const r=tl.getBoundingClientRect();playhead=Math.max(0,Math.min(duration,((e.clientX-r.left)/r.width)*duration));render();}});
++    row.append(name,tl); lanes.append(row);
++  });
++  const list=document.getElementById('list'); list.innerHTML='';
++  data.segments.forEach((s,i)=>{
++    const row=document.createElement('div'); row.className='item'; row.dataset.segmentId=s.id;
++    const top=document.createElement('div'); top.className='rowline'; top.style.display='contents';
++    const who=document.createElement('input'); who.className='who'; who.value=s.text; who.setAttribute('aria-label','Transcript '+(i+1));
++    who.onchange=()=>{s.text=who.value;save();};
++    const text=document.createElement('input'); text.className='txt'; text.type='text'; text.value=s.speaker; text.setAttribute('aria-label','Speaker '+(i+1));
++    text.onchange=()=>{s.speaker=text.value.trim()||'Speaker 1';save();};
++    const times=document.createElement('div'); times.className='times';
++    [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);if(s.end<=s.start)s.end=+(s.start+0.1).toFixed(2);save();};times.append(input);});
++    const btn=document.createElement('button'); btn.className='segplay'; btn.textContent='▶'; btn.title='Speak segment '+(i+1); btn.onclick=()=>speak(s);
++    const idx=document.createElement('div'); idx.className='muted'; idx.style.fontSize='12px'; idx.textContent='#'+(i+1);
++    row.append(idx,who,text,times,btn); list.append(row);
++  });
++  renderVoiceChoices();
++}
++function drag(e,s,mode){
++  e.preventDefault(); e.stopPropagation();
++  const target=e.currentTarget, startX=e.clientX, startY=e.clientY, oldA=s.start, oldB=s.end;
++  const tl=target.closest('.timeline'), clip=target.closest('.clip');
++  if(!tl||!clip) return;
++  const scale=duration/tl.clientWidth; let moved=false; clip._moved=false;
++  try{target.setPointerCapture(e.pointerId);}catch(err){}
++  function move(ev){
++    if(Math.abs(ev.clientX-startX)+Math.abs(ev.clientY-startY)>4) moved=true;
++    const delta=(ev.clientX-startX)*scale;
++    if(mode==='left') s.start=Math.max(0,Math.min(oldA+delta,oldB-0.1));
++    else if(mode==='right') s.end=Math.max(oldA+0.1,oldB+delta);
++    else { const len=oldB-oldA; let ns=Math.max(0,oldA+delta); s.start=+ns.toFixed(3); s.end=+(ns+len).toFixed(3); }
++    clip.style.left=(s.start/duration*100)+'%';
++    clip.style.width=Math.max(0.8,(s.end-s.start)/duration*100)+'%';
++  }
++  function up(){
++    target.removeEventListener('pointermove',move); target.removeEventListener('pointerup',up); target.removeEventListener('pointercancel',up);
++    clip._moved=moved;
++    if(moved) save(); else render();
++    if(pendingSegmentFocus===String(s.id)){pendingSegmentFocus=null;setTimeout(()=>focusSegment(s),30);}
++    setTimeout(()=>{clip._moved=false;},300);
++  }
++  target.addEventListener('pointermove',move); target.addEventListener('pointerup',up); target.addEventListener('pointercancel',up);
++}
++function speak(s){
++  try{speechSynthesis.cancel();}catch(e){}
++  const u=new SpeechSynthesisUtterance(s.text);
++  u.voice=voiceFor(s.speaker);
++  u.rate=Number(document.getElementById('rate').value)||1;
++  document.getElementById('status').textContent=s.speaker+': '+s.text;
++  try{speechSynthesis.speak(u);}catch(e){}
++}
++function stop(){playing=false;clearTimeout(timer);try{speechSynthesis.cancel();}catch(e){}document.getElementById('play').textContent='▶ Play all';}
++function playNext(){
++  if(!playing) return;
++  const s=data.segments.filter(x=>x.start>=playhead-0.02).sort((a,b)=>a.start-b.start)[0];
++  if(!s){stop();return;}
++  playhead=s.start; render();
++  const u=new SpeechSynthesisUtterance(s.text);
++  u.voice=voiceFor(s.speaker);
++  u.rate=Number(document.getElementById('rate').value)||1;
++  document.getElementById('status').textContent=s.speaker+': '+s.text;
++  u.onend=()=>{playhead=s.end;render();timer=setTimeout(playNext,250);};
++  u.onerror=()=>{playhead=s.end;timer=setTimeout(playNext,250);};
++  try{speechSynthesis.speak(u);}catch(e){playhead=s.end;timer=setTimeout(playNext,250);}
++}
++document.getElementById('play').onclick=()=>{stop();playing=true;document.getElementById('play').textContent='❚❚ Playing';playhead=0;playNext();};
++document.getElementById('stop').onclick=stop;
++loadScenario(0);
++</script></body></html>
++"""
++
++
++def create_aggregate(conversations, limit=50):
++    """Write the multi-scenario editor page (slack.html) into the data folder's voice/.
++
++    Covers every recording available in the current mode: all recent live
++    conversations via the Bee CLI, or all demo conversations in demo mode.
++    The scenario picker page shares the per-conversation localStorage keys
++    (``beeplex-voice-<id>``) with the single-conversation pages, so timing
++    edits made in one are visible in the other.
++    """
++    from .config import DEMO
++
++    scenarios = []
++    for conv in conversations[:limit]:
++        data = editor_data(conv)
++        data["summary"] = conv.get("summary") or conv.get("Summary_Notes") or ""
++        scenarios.append(data)
++    folder = DATA_DIR / "voice"
++    folder.mkdir(parents=True, exist_ok=True)
++    path = folder / "slack.html"
++    payload = json.dumps(scenarios, ensure_ascii=False).replace("</", "<\\/")
++    if DEMO:
++        title = "Bee voice transcript editor — all demo scenarios"
++        subtitle = "All beeplex demo scenarios · browser generated voice · drag clips to move, drag edges to trim"
++    else:
++        title = "Bee voice transcript editor — all recordings"
++        subtitle = "All recent Bee recordings · browser generated voice · drag clips to move, drag edges to trim"
++    page = _ALL_PAGE.replace("__TITLE__", title).replace("__SUBTITLE__", subtitle).replace("__DATA__", payload)
++    path.write_text(page, encoding="utf-8")
++    return {"path": str(path), "scenarios": len(scenarios)}
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 2e8cdca..1eaeb13 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -15,7 +15,7 @@ COMMANDS = [
+     (["context"], {"data", "window", "has_more"}),
+     (["search", "launch"], {"data", "date_timezone"}),
+     (["conversations"], {"data", "next_cursor"}),
+-    (["read", "mock-conv-1"], {"data", "next_offset", "total_utterances"}),
++    (["read", "sim_template_visit"], {"data", "next_offset", "total_utterances"}),
+     (["todos"], {"data"}),
+     (["score"], {"data", "detail", "interpretation"}),
+     (["report", "--limit", "1"], {"files", "count"}),
+@@ -96,9 +96,9 @@ def test_arguments_and_pagination(tmp_path):
+     )
+     assert json.loads(second.stdout)["data"][0]["id"] != payload["data"][0]["id"]
+     read = run_cli(
+-        tmp_path, "read", "mock-conv-1", "--offset", "1", "--limit", "1", "--json"
++        tmp_path, "read", "sim_template_visit", "--offset", "1", "--limit", "1", "--json"
+     )
+-    assert json.loads(read.stdout)["data"]["utterances"][0]["speaker"] == "Priya"
++    assert json.loads(read.stdout)["data"]["utterances"][0]["speaker"] == "Speaker 2"
+     search = run_cli(
+         tmp_path,
+         "search",
+@@ -135,7 +135,7 @@ def test_arguments_and_pagination(tmp_path):
+     [
+         ["context", "--period", "date"],
+         ["search", "launch", "--since", "2026-02-30"],
+-        ["read", "mock-conv-1", "--offset", "-1"],
++        ["read", "sim_template_visit", "--offset", "-1"],
+         ["read", "missing"],
+         ["score", "--limit", "51"],
+         ["profile", "--full"],

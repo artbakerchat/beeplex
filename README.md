@@ -120,6 +120,14 @@ audio). Bee timestamps are used when available; otherwise the editor estimates
 segment lengths from the text. Timing and transcript edits are saved in that
 browser's local storage, shared between the two pages.
 
+The editor follows the spontaneous-speech annotation standard in
+`guideline.pdf`. It keeps transcript text editable, but highlights likely
+annotation problems while you work: unsupported fillers or non-verbal tags,
+unbracketed fillers, unsupported punctuation, non-standard spellings, and
+inconsistent speaker labels. It never silently rewrites transcript text, so
+the final decision remains grounded in the audio. The reusable validator is in
+`beeplex/transcription_guidelines.py`.
+
 **Write Bee's diary:**
 
 ```sh

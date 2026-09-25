@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .config import DATA_DIR
+from .transcription_guidelines import validate_segments
 
 
 def _seconds(value):
@@ -54,7 +55,13 @@ def editor_data(conversation):
         segments.append({"id": i, "speaker": utterance["speaker"], "text": utterance["text"], "start": round(start, 3), "end": round(end, 3)})
         cursor = end + 0.35
     length = max([s["end"] for s in segments] + [1.0])
-    return {"title": conversation.get("title") or conversation.get("name") or "Bee conversation", "id": str(conversation.get("id") or conversation.get("conversation_id") or "conversation"), "segments": segments, "duration": round(length + 1, 3)}
+    return {
+        "title": conversation.get("title") or conversation.get("name") or "Bee conversation",
+        "id": str(conversation.get("id") or conversation.get("conversation_id") or "conversation"),
+        "segments": segments,
+        "duration": round(length + 1, 3),
+        "guidelines": validate_segments(segments),
+    }
 
 
 # _VOICE_PAGE is the single canonical editor design. The checked-in slack.html
@@ -107,6 +114,10 @@ button:hover{border-color:var(--blue)}
 .segplay{flex:none}
 .footer{font-size:12px;color:var(--muted);margin-top:14px}
 .count{font-size:12px;color:var(--muted)}
+.guide{font-size:13px;color:var(--muted);line-height:1.55}
+.guide code{background:#f3f5f7;border:1px solid var(--line);border-radius:4px;padding:1px 4px;color:var(--text)}
+.valid{color:var(--green);font-weight:600}.invalid{color:#b42318;font-weight:600}
+.issues{font-size:12px;color:#b42318;grid-column:2 / -1;margin-top:-4px}
 @media(max-width:700px){
   main{padding:16px 10px}
   h1{font-size:19px}
@@ -142,6 +153,12 @@ button:hover{border-color:var(--blue)}
   <div class="footer">Bee's original recording is not included in this transcript response. Playback uses your browser's speech synthesis; segment lengths are editable estimates. Edits are saved per-scenario in this browser's local storage.</div>
 </section>
 <section class="panel"><h2 style="font-size:16px;margin:0 0 10px">Transcript and timing</h2><div id="list" class="list"></div></section>
+<section class="panel guide">
+  <h2 style="font-size:16px;margin:0 0 8px">Annotation guideline</h2>
+  <div id="guidelineStatus" aria-live="polite"></div>
+  <p>Listen first, then transcribe every audible event. Put fillers in square brackets, such as <code>[uh]</code>; non-verbal sounds and pauses in angle brackets, such as <code>&lt;cough&gt;</code> and <code>&lt;pause&gt;</code>; uncertain guesses in <code>((double parentheses))</code>; and foreign-language speech in <code>{curly braces}</code>.</p>
+  <p>Use consistent <code>Speaker 1</code> labels, preserve false starts with a trailing hyphen, and use only the supported punctuation. Reject only when overlapping speakers or persistent noise makes the primary speech unintelligible.</p>
+</section>
 </main>
 <script>
 const SCENARIOS=__DATA__;
@@ -175,6 +192,25 @@ function loadScenario(idx){
   sumEl.style.display=original.summary?'':'none';
   document.getElementById('segCount').textContent=data.segments.length+' segments · '+data.duration.toFixed(1)+'s';
   render();
+}
+
+const allowedFillers=new Set(['uh-huh','mm-hmm','psst','pfft','uhm','ugh','hmm','yeah','yep','yup','ooh','huh','shh','uh','oh','aw','eh','ah']);
+const allowedTags=new Set(['laugh','cry','gag','throatclear','gasp','cough','swallow','noise','inaudible','pause']);
+function checkText(text){
+  const issues=[];
+  for(const m of text.matchAll(/<([^<>]*)>/g)) if(!allowedTags.has(m[1].trim().toLowerCase())) issues.push('unknown tag '+m[0]);
+  for(const m of text.matchAll(/\[([^\[\]]*)\]/g)) if(!allowedFillers.has(m[1].trim().toLowerCase())) issues.push('unsupported filler '+m[0]);
+  if(/(?<![\w\[])\b(uh-huh|mm-hmm|psst|pfft|uhm|ugh|hmm|yeah|yep|yup|ooh|huh|shh|uh|oh|aw|eh|ah)\b(?!\])/i.test(text)) issues.push('put fillers in [square brackets]');
+  const plain=text.replace(/<[^<>]*>|\[[^\[\]]*\]|\(\([^()]*\)\)|\{[^{}]*\}/g,'').replace(/!\?/g,'');
+  const bad=[...new Set([...plain].filter(ch=>!/[\p{L}\p{N}\s.?!,\"'\-]/u.test(ch)))];
+  if(bad.length) issues.push('unsupported punctuation: '+bad.join(' '));
+  return issues;
+}
+function updateGuidelineStatus(){
+  const problems=data.segments.flatMap(s=>checkText(s.text).map(issue=>'#'+(Number(s.id)+1)+' '+issue));
+  const el=document.getElementById('guidelineStatus');
+  el.className=problems.length?'invalid':'valid';
+  el.textContent=problems.length?(problems.length+' item(s) need review: '+problems.slice(0,3).join('; ')+(problems.length>3?'…':'')):'No automatic guideline issues detected. Confirm every audible event by listening.';
 }
 pick.onchange=()=>loadScenario(pick.selectedIndex);
 let availableVoices=[];
@@ -253,9 +289,12 @@ function render(){
     [['start','Start'],['end','End']].forEach(([k])=>{const input=document.createElement('input');input.type='number';input.min=0;input.step='0.01';input.value=(+s[k]).toFixed(2);input.title=k+' seconds';input.setAttribute('aria-label',k+' '+(i+1));input.onchange=()=>{s[k]=Math.max(0,Number(input.value)||0);if(s.end<=s.start)s.end=+(s.start+0.1).toFixed(2);save();};times.append(input);});
     const btn=document.createElement('button'); btn.className='segplay'; btn.textContent='▶'; btn.title='Speak segment '+(i+1); btn.onclick=()=>speak(s);
     const idx=document.createElement('div'); idx.className='muted'; idx.style.fontSize='12px'; idx.textContent='#'+(i+1);
-    row.append(idx,transcript,speakerInput,times,btn); list.append(row);
+    const issues=document.createElement('div'); issues.className='issues';
+    const found=checkText(s.text); issues.textContent=found.join(' · ');
+    row.append(idx,transcript,speakerInput,times,btn,issues); list.append(row);
   });
   renderVoiceChoices();
+  updateGuidelineStatus();
 }
 function drag(e,s,mode){
   e.preventDefault(); e.stopPropagation();

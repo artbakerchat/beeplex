@@ -1,28 +1,33 @@
-# BeePlex
+## Quick Start
 
-Chat with your Bee memories from an MCP-compatible chat app. Ask what happened
-today, find a past conversation, review commitments, or generate a report.
-Your chat app supplies the language model; BeePlex supplies the tools and context.
+Requires Python 3.11 or newer.
 
-## Install
-
-Requires Python 3.11+. From the repository folder:
+install BeePlex and the optional
+Office report dependencies:
 
 ```sh
-python -m pip install -e ".[reports]"
+py -m pip install --user -e ".[reports]"
 ```
 
-- macOS / Linux: `python3 -m pip install -e ".[reports]"`
-- Windows: `py -m pip install --user -e ".[reports]"`
+On macOS or Linux,
+use `python3 -m pip install -e ".[reports]"` instead.
 
-After installing, `beeplex` is a command on your PATH. On Windows, if PowerShell
-does not recognize it yet, close and reopen the terminal — the installer places
-the command in `%APPDATA%\Python\Python3XX\Scripts`, which PATH picks up on a
-fresh shell.
+After installation, the `beeplex` command should be available on your PATH.
 
-No install needed for a quick look: from the same folder,
-`python -m beeplex --demo doctor` (or `py -m beeplex --demo doctor` on Windows)
-runs straight from the checkout, as long as the dependencies are installed.
+```sh
+beeplex --demo doctor
+beeplex --demo conversations --limit 3
+beeplex --demo read sim_template_visit --limit 3
+```
+
+If beeplex still isn’t on your PATH, a bare command won’t work yet. Path:
+
+$scripts = py -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user'))"
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if (($userPath -split ';') -notcontains $scripts) {
+    $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $scripts } else { "$userPath;$scripts" }
+    [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+}
 
 ## Example runs
 
@@ -126,7 +131,7 @@ annotation problems while you work: unsupported fillers or non-verbal tags,
 unbracketed fillers, unsupported punctuation, non-standard spellings, and
 inconsistent speaker labels. It never silently rewrites transcript text, so
 the final decision remains grounded in the audio. The reusable validator is in
-`beeplex/transcription_guidelines.py`.
+`python/transcription_guidelines.py`.
 
 **Write Bee's diary:**
 
@@ -178,7 +183,7 @@ Python path automatically and looks like this:
   "mcpServers": {
     "beeplex": {
       "command": "/absolute/path/to/python",
-      "args": ["-m", "beeplex", "--demo"]
+      "args": ["-m", "python", "--demo"]
     }
   }
 }
@@ -278,7 +283,7 @@ BeePlex still starts the MCP stdio server; `--check` and `--config` work as befo
 | --- | --- |
 | `BEE_CLI` | `bee`; executable path if it is not on your chat app's PATH |
 | `BEEPLEX_DATA_DIR` | `~/.beeplex`; reports, dashboard, diary and profile |
-| `BEEPLEX_DEMO=1` | Same as `--demo`: routes the CLI calls to the bundled demo CLI (`beeplex/demo_cli.py`), so the exact same code path serves clearly-labelled sample data — there is no separate mock branch |
+| `BEEPLEX_DEMO=1` | Same as `--demo`: routes the CLI calls to the bundled demo CLI (`python/demo_cli.py`), so the exact same code path serves clearly-labelled sample data — there is no separate mock branch |
 | `BEEPLEX_LLM=1` | Opt in to extra provider calls for scoring and writing |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | Optional Gemini enrichment settings |
 | `BEDROCK_REGION`, `BEDROCK_MODEL` | Optional Bedrock enrichment settings |
@@ -301,7 +306,7 @@ its model. No HTTP listener or cloud deployment is needed.
 ## Repository
 
 ```text
-beeplex/       MCP server, Bee access, scoring and report modules
+python/        MCP server, Bee access, scoring and report modules
 tests/         Offline tests and MCP transport checks
 simulator/     Scripted Bee CLI and scoring benchmark
 archive/       Original agent/UI, patches, workbook and historical documentation
@@ -310,8 +315,8 @@ pyproject.toml Package, dependencies and beeplex command
 
 The old AWS/Streamlit app is retained as historical source in `archive/`; it is
 not part of the installed package. The former root scripts are now package
-modules (`python -m beeplex.reports`, `python -m beeplex.profile`,
-`python -m beeplex.bee_fetcher --clinical`). Clinical extraction requires the
+modules (`python -m python.reports`, `python -m python.profile`,
+`python -m python.bee_fetcher --clinical`). Clinical extraction requires the
 `reports` extra and remains a separate command, outside the MCP tools.
 
 ## Develop
@@ -319,7 +324,7 @@ modules (`python -m beeplex.reports`, `python -m beeplex.profile`,
 ```sh
 python -m pip install -e ".[reports,dev]"
 python -m pytest
-python -m ruff check beeplex tests
+python -m ruff check python tests
 python simulator/bench.py
 ```
 

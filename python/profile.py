@@ -24,9 +24,9 @@ candidate profile updates as JSON, merged defensively; without a key
 the profile is built from structure alone.
 
 Usage:
-    python -m beeplex.profile            # incremental update
-    python -m beeplex.profile --full     # rebuild from scratch
-    python -m beeplex.profile --limit 50 # conversations considered on --full
+    python -m python.profile            # incremental update
+    python -m python.profile --full     # rebuild from scratch
+    python -m python.profile --limit 50 # conversations considered on --full
 """
 
 import json

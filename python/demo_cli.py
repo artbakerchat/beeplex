@@ -4,7 +4,7 @@
 Speaks the same argv/JSON contract as the real Bee CLI but serves
 clearly-labelled sample memories. Because the demo is a *CLI*, not a code
 branch, it runs through the exact same subprocess path as live mode
-(``beeplex.client.run``) -- there is no separate mock branch anywhere in
+(``python.client.run``) -- there is no separate mock branch anywhere in
 beeplex, so the demo exercises the real data handling.
 
 Invoked as ``demo_cli.py <command> [args] [--json]``; ``--json`` is

@@ -4,8 +4,8 @@ from docx import Document
 from openpyxl import load_workbook
 from pptx import Presentation
 
-from beeplex import bee_fetcher, llm_scoring, reports
-from beeplex.demo_cli import _conversations
+from python import bee_fetcher, llm_scoring, reports
+from python.demo_cli import _conversations
 
 
 def fixture_rows():

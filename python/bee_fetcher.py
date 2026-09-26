@@ -8,7 +8,7 @@ Two modes, one code path:
 * ``live`` - the ``bee`` binary is on PATH and authenticated
   (``bee me --json`` succeeds). Real transcripts are fetched.
 * ``demo`` - explicitly enabled with ``BEEPLEX_DEMO=1``. ``BEE_CLI`` is
-  forced to the bundled fake CLI (``beeplex/demo_cli.py``), which serves
+    forced to the bundled fake CLI (``python/demo_cli.py``), which serves
   clearly-labelled sample conversations through the exact same subprocess
   path as live mode. There is no separate mock branch: the demo exercises
   the real data handling. Live failures raise actionable errors; they
@@ -43,7 +43,7 @@ MOCK_FORCED = DEMO
 # one-call-per-row retries.
 _LLM_NOT_FETCHED = object()
 
-# Schema keys consumed by beeplex.reports (docx / xlsx / pptx builders).
+# Schema keys consumed by python.reports (docx / xlsx / pptx builders).
 SCHEMA = [
     "Recording_Date",
     "Session_Title",
@@ -478,7 +478,7 @@ def _resolve_source(conv):
 
 
 def _row_from_source(source, parts, events, llm=_LLM_NOT_FETCHED, conv_id=None):
-    """Map a resolved conversation payload onto the beeplex.reports report schema."""
+    """Map a resolved conversation payload onto the python.reports report schema."""
     title = (
         source.get("title")
         or source.get("name")
@@ -501,7 +501,7 @@ def _row_from_source(source, parts, events, llm=_LLM_NOT_FETCHED, conv_id=None):
     )
 
     return {
-        # The actual Bee recording date - wired into report titles by beeplex.reports.
+        # The actual Bee recording date - wired into report titles by python.reports.
         "Recording_Date": _recording_date(source),
         "Session_Title": str(title)[:80],
         "Source_Transcript_Snippet": snippet,
@@ -517,7 +517,7 @@ def _row_from_source(source, parts, events, llm=_LLM_NOT_FETCHED, conv_id=None):
 
 
 def conversation_to_row(conv, llm=_LLM_NOT_FETCHED):
-    """Map one conversation payload onto the beeplex.reports report schema.
+    """Map one conversation payload onto the python.reports report schema.
 
     Convenience wrapper: resolves the full conversation, then builds the
     row. ``llm`` is a pre-fetched llm_engagement() result (or None); when

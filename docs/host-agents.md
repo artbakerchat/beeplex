@@ -49,7 +49,7 @@ Bee device → Bee cloud → Bee CLI (authenticated) → BeePlex → host → yo
 BeePlex never talks to the device directly. The **Bee CLI is the only
 bridge** to your data (`bee conversations list --json`, etc.), called as a
 subprocess. Demo mode (`--demo`) swaps in a fake CLI
-(`beeplex/demo_cli.py`) on the exact same code path — there is no separate
+(`python/demo_cli.py`) on the exact same code path — there is no separate
 mock branch, so switching to live data changes nothing but the source.
 
 ## Hosts can stack: the layered pattern

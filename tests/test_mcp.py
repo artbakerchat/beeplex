@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 async def connect(tmp_path, *, demo=False, protocol="auto", **env):
     params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "beeplex"] + (["--demo"] if demo else []),
+        args=["-m", "python"] + (["--demo"] if demo else []),
         cwd=str(tmp_path),
         env={
             "BEE_CLI": str(ROOT / "simulator" / "bee"),

@@ -16,13 +16,13 @@ bedrock = ["boto3>=1.35,<2"]
 dev = ["pytest>=8,<10", "ruff>=0.12,<1"]
 
 [project.scripts]
-beeplex = "beeplex.__main__:main"
+beeplex = "python.__main__:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["beeplex"]
+packages = ["python"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/beeplex", "/tests", "/simulator", "/README.md", "/pyproject.toml", "/uv.lock"]
+include = ["/python", "/tests", "/simulator", "/README.md", "/pyproject.toml", "/uv.lock"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

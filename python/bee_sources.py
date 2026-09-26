@@ -1,9 +1,9 @@
 """Read-only Bee CLI data sources for beeplex (the plumbing layer).
 
 Thin wrappers over the official Bee CLI's *read* commands. Every call goes
-through ``beeplex.client.run`` -- the single subprocess path. In demo mode
+through ``python.client.run`` -- the single subprocess path. In demo mode
 (``beeplex --demo``) ``BEE_CLI`` points at the bundled fake CLI
-(``beeplex/demo_cli.py``), so the exact same code serves clearly-labelled
+(``python/demo_cli.py``), so the exact same code serves clearly-labelled
 sample data; there is no separate mock branch.
 
 This layer is deliberately READ-ONLY (user's standing call, 2026-09-23):

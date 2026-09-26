@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from beeplex import client
+from python import client
 
 
 @pytest.mark.parametrize("failure", ["timeout", "exit", "json", "shape"])
@@ -65,7 +65,7 @@ def test_simulator_launches_on_windows_and_posix(monkeypatch):
 
 def test_config_command_prints_usable_absolute_paths(tmp_path):
     proc = subprocess.run(
-        [sys.executable, "-m", "beeplex", "--demo", "--config", "--data-dir", "output"],
+        [sys.executable, "-m", "python", "--demo", "--config", "--data-dir", "output"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -75,7 +75,7 @@ def test_config_command_prints_usable_absolute_paths(tmp_path):
     assert config["command"] == sys.executable
     assert config["args"] == [
         "-m",
-        "beeplex",
+        "python",
         "--demo",
         "--data-dir",
         str(tmp_path / "output"),

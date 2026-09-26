@@ -1,4 +1,4 @@
-from beeplex.transcription_guidelines import (
+from python.transcription_guidelines import (
     COMMON_SPELLINGS,
     FILLER_WORDS,
     NONVERBAL_TAGS,

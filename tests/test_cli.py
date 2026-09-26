@@ -34,7 +34,7 @@ def run_cli(tmp_path, *args, demo=True, **env):
         [
             sys.executable,
             "-m",
-            "beeplex",
+            "python",
             *(["--demo"] if demo else []),
             "--data-dir",
             str(tmp_path / "output"),
@@ -160,7 +160,7 @@ def test_legacy_flags(tmp_path):
     assert config.returncode == 0
     assert json.loads(config.stdout)["mcpServers"]["beeplex"]["args"] == [
         "-m",
-        "beeplex",
+        "python",
         "--demo",
         "--data-dir",
         str(tmp_path / "output"),

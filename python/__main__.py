@@ -1,4 +1,4 @@
-"""One entry point: beeplex (or python -m beeplex)."""
+"""One entry point: beeplex (or python -m python)."""
 
 import argparse
 import json
@@ -47,7 +47,7 @@ def main() -> None:
         os.environ["BEEPLEX_DATA_DIR"] = args.data_dir
 
     if args.config:
-        server_args = ["-m", "beeplex"]
+        server_args = ["-m", "python"]
         if args.demo:
             server_args.append("--demo")
         if args.data_dir:

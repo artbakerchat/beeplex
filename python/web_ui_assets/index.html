@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>BeePlex | Memory desk</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body data-token="__TOKEN__" data-mode="__MODE__">
+  <div class="shell">
+    <aside class="rail">
+      <div class="brand"><div class="brand-mark">B</div><div class="brand-name">BeePlex</div></div>
+      <nav aria-label="Main navigation">
+        <p class="rail-label">Memory desk</p>
+        <div class="nav">
+          <button data-page="home" aria-current="page"><span class="nav-index">01</span>Overview</button>
+          <button data-page="conversations"><span class="nav-index">02</span>Conversations</button>
+          <button data-page="commitments"><span class="nav-index">03</span>Commitments</button>
+          <button data-page="reflection"><span class="nav-index">04</span>Reflection</button>
+          <button data-page="files"><span class="nav-index">05</span>Journal &amp; files</button>
+        </div>
+      </nav>
+      <div class="rail-foot">Local on this computer<br><span id="railMode">Checking mode</span></div>
+    </aside>
+    <main class="main">
+      <div class="topbar">
+        <span class="mode">Mode: <strong id="modeLabel">__MODE__</strong></span>
+        <button class="button quiet" data-action="status">Check connection</button>
+      </div>
+      <div class="page">
+        <header class="page-head">
+          <div><p class="eyebrow" id="pageEyebrow">Bee memory</p><h1 id="pageTitle">Overview</h1><p class="subhead" id="pageSubhead">Recent conversations, ready when you are.</p></div>
+        </header>
+        <div id="workspace"></div>
+        <section id="output" class="result" aria-live="polite"></section>
+      </div>
+    </main>
+  </div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

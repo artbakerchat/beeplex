@@ -31,8 +31,24 @@ def test_home_page_contains_local_interface_and_token(ui_server):
 
     assert response.status == 200
     assert "BeePlex | Memory desk" in page
-    assert 'const token = "test-token"' in page
+    assert 'data-token="test-token"' in page
+    assert '/assets/style.css' in page
+    assert '/assets/app.js' in page
     assert "127.0.0.1" not in page
+
+
+def test_static_assets_are_served(ui_server):
+    url, _ = ui_server
+
+    with urlopen(f"{url}/assets/style.css") as response:
+        stylesheet = response.read().decode("utf-8")
+        assert response.headers["Content-Type"] == "text/css; charset=utf-8"
+    assert ":root" in stylesheet
+
+    with urlopen(f"{url}/assets/app.js") as response:
+        script = response.read().decode("utf-8")
+        assert response.headers["Content-Type"] == "application/javascript; charset=utf-8"
+    assert "document.body.dataset.token" in script
 
 
 def test_action_endpoint_requires_token(ui_server):

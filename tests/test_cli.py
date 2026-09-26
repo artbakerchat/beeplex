@@ -66,6 +66,7 @@ def test_demo_commands(tmp_path, args, keys, as_json, env_demo):
         BEEPLEX_DEMO="1" if env_demo else "0",
     )
     assert response.returncode == 0, response.stderr
+    assert "[MOCK]" not in response.stdout
     if as_json:
         payload = json.loads(response.stdout)
         assert payload["mode"] == "demo"

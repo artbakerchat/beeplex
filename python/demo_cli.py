@@ -2,7 +2,7 @@
 """Demo stand-in for the Bee CLI, used by ``beeplex --demo``.
 
 Speaks the same argv/JSON contract as the real Bee CLI but serves
-clearly-labelled sample memories. Because the demo is a *CLI*, not a code
+sample memories and clearly indicates demo mode. Because the demo is a *CLI*, not a code
 branch, it runs through the exact same subprocess path as live mode
 (``python.client.run``) -- there is no separate mock branch anywhere in
 beeplex, so the demo exercises the real data handling.
@@ -24,8 +24,8 @@ _MINUTE = 60_000
 # --- sample dataset ------------------------------------------------------
 # The nine simulator scenarios (simulator/conversations.json) are the single
 # source of truth for demo data -- the same scenarios behind the voice
-# editor's aggregate page and the scoring benchmark. They are served with
-# [MOCK] labels so demo output is never mistaken for real memories.
+# editor's aggregate page and the scoring benchmark. Demo mode is identified
+# separately so sample content stays readable.
 
 
 def _conversations():
@@ -50,7 +50,7 @@ def _conversations():
             utterances.append(
                 {
                     "speaker": u.get("speaker") or "Speaker 1",
-                    "text": "[MOCK] " + str(u.get("text") or ""),
+                    "text": str(u.get("text") or ""),
                     "timestamp": stamp,
                 }
             )
@@ -58,8 +58,8 @@ def _conversations():
         conversations.append(
             {
                 "id": s.get("id") or "sim-conversation",
-                "title": "[MOCK] " + str(s.get("title") or "Untitled"),
-                "summary": "[MOCK] " + str(s.get("summary") or ""),
+                "title": str(s.get("title") or "Untitled"),
+                "summary": str(s.get("summary") or ""),
                 "start_time": (
                     now - int(start_minutes) * _MINUTE
                     if isinstance(start_minutes, (int, float))
@@ -85,12 +85,12 @@ def _todos():
     return [
         {
             "id": "sim-todo-1",
-            "text": "[MOCK] Revisit the holiday plans disagreement.",
+            "text": "Revisit the holiday plans disagreement.",
             "completed": False,
         },
         {
             "id": "sim-todo-2",
-            "text": "[MOCK] Decide the launch date after the product debate.",
+            "text": "Decide the launch date after the product debate.",
             "completed": False,
         },
     ]
@@ -100,7 +100,7 @@ def _suggestions():
     return [
         {
             "id": "sim-sugg-1",
-            "text": "[MOCK] Suggested: ask about the timeline risk in the launch debate.",
+            "text": "Suggested: ask about the timeline risk in the launch debate.",
             "conversation_id": "sim_debate",
         },
     ]
@@ -112,13 +112,13 @@ def _journals():
         {
             "id": "mock-journal-1",
             "state": "READY",
-            "text": "[MOCK] Idea: coach on forward motion, not just engagement.",
+            "text": "Idea: coach on forward motion, not just engagement.",
             "timestamp": now - 3 * _HOUR,
         },
         {
             "id": "mock-journal-2",
             "state": "READY",
-            "text": "[MOCK] Remember to ask Priya about the demo script.",
+            "text": "Remember to ask Priya about the demo script.",
             "timestamp": now - 30 * _HOUR,
         },
     ]
@@ -128,14 +128,14 @@ def _insights():
     return [
         {
             "id": "mock-insight-1",
-            "title": "[MOCK] Thursday planning pattern",
-            "text": "[MOCK] Your Thursday conversations run 40% longer and "
+            "title": "Thursday planning pattern",
+            "text": "Your Thursday conversations run 40% longer and "
             "circle back to timelines twice on average.",
         },
         {
             "id": "mock-insight-2",
-            "title": "[MOCK] Quiet mornings",
-            "text": "[MOCK] You speak least before 9am; your longest turns "
+            "title": "Quiet mornings",
+            "text": "You speak least before 9am; your longest turns "
             "happen after lunch.",
         },
     ]
@@ -143,8 +143,8 @@ def _insights():
 
 def _places():
     return [
-        {"name": "[MOCK] Home", "visits": 42},
-        {"name": "[MOCK] Bluebird Cafe", "visits": 7},
+        {"name": "Home", "visits": 42},
+        {"name": "Bluebird Cafe", "visits": 7},
     ]
 
 
@@ -152,17 +152,17 @@ def _facts():
     return [
         {
             "id": "mock-fact-1",
-            "text": "[MOCK] Prefers morning meetings.",
+            "text": "Prefers morning meetings.",
             "confirmed": True,
         },
         {
             "id": "mock-fact-2",
-            "text": "[MOCK] Works on the Bee hackathon project.",
+            "text": "Works on the Bee hackathon project.",
             "confirmed": True,
         },
         {
             "id": "mock-fact-3",
-            "text": "[MOCK] Might be training for a marathon.",
+            "text": "Might be training for a marathon.",
             "confirmed": False,
         },
     ]
@@ -177,7 +177,7 @@ def _daily():
         {
             "id": f"mock-daily-{d}",
             "date": d,
-            "summary": "[MOCK] " + "; ".join(titles),
+            "summary": "; ".join(titles),
         }
         for d, titles in sorted(days.items(), reverse=True)
     ]
@@ -222,7 +222,7 @@ def _page(items, argv):
 
 
 def _me(positional, argv):
-    return {"id": "demo-user", "name": "[MOCK] Demo User", "demo": True}
+    return {"id": "demo-user", "name": "Demo User", "demo": True}
 
 
 def _now(positional, argv):
@@ -237,12 +237,12 @@ def _now(positional, argv):
 def _today(positional, argv):
     payload = {
         "date": time.strftime("%Y-%m-%d"),
-        "brief": "[MOCK] Two meetings today: launch sync at 10, dentist at 4.",
+        "brief": "Two meetings today: launch sync at 10, dentist at 4.",
     }
     if _has(argv, "--context"):
         payload.update(
             {
-                "daily_summary": "[MOCK] A planning-heavy day.",
+                "daily_summary": "A planning-heavy day.",
                 "active_todos": _todos(),
                 "recent_conversations": _conv_summaries()[:2],
             }
@@ -386,7 +386,7 @@ def _locations_clusters(positional, argv):
 
 
 def _locations_current(positional, argv):
-    return {"place": "[MOCK] Home", "timestamp": _NOW_MS()}
+    return {"place": "Home", "timestamp": _NOW_MS()}
 
 
 def _facts_list(positional, argv):

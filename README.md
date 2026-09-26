@@ -44,10 +44,10 @@ if (($userPath -split ';') -notcontains $scripts) {
 
 ## Example runs
 
-Demo mode (`--demo`) serves the nine simulator scenarios as clearly labelled
-`[MOCK]` sample conversations through the exact same code path as the live Bee
-CLI — no Bee account or login needed. Every command below works in live mode by
-omitting `--demo`.
+Demo mode (`--demo`) serves the nine simulator scenarios as sample conversations
+through the exact same code path as the live Bee CLI — no Bee account or login
+needed. The CLI and website identify when they are showing sample data. Every
+command below works in live mode by omitting `--demo`.
 
 **Check your setup:**
 
@@ -69,14 +69,14 @@ $ beeplex --demo conversations --limit 3
 Mode: demo (sample memories)
 Data:
   Id: sim_template_visit
-  Title: [MOCK] TEMPLATE - doctor visit (edit me)
-  Summary: [MOCK] Minimal test template - six turns
+  Title: TEMPLATE - doctor visit (edit me)
+  Summary: Minimal test template - six turns
   Id: sim_doctor_visit
-  Title: [MOCK] Patient visit - knee pain
-  Summary: [MOCK] Doctor sees a patient about three weeks of right knee pain
+  Title: Patient visit - knee pain
+  Summary: Doctor sees a patient about three weeks of right knee pain
   Id: sim_followup_visit
-  Title: [MOCK] BP med review
-  Summary: [MOCK] Blood pressure follow-up; dizziness since lisinopril dose increase
+  Title: BP med review
+  Summary: Blood pressure follow-up; dizziness since lisinopril dose increase
 Next cursor: 3
 ```
 
@@ -87,15 +87,15 @@ $ beeplex --demo read sim_template_visit --limit 3
 Mode: demo (sample memories)
 Data:
   Id: sim_template_visit
-  Title: [MOCK] TEMPLATE - doctor visit (edit me)
-  Summary: [MOCK] Minimal test template - six turns
+  Title: TEMPLATE - doctor visit (edit me)
+  Summary: Minimal test template - six turns
   Utterances:
     Speaker: Speaker 1
-    Text: [MOCK] what's changed
+    Text: what's changed
     Speaker: Speaker 2
-    Text: [MOCK] nothing
+    Text: nothing
     Speaker: Speaker 1
-    Text: [MOCK] what's new
+    Text: what's new
 Next offset: 3
 Total utterances: 6
 ```
@@ -106,12 +106,12 @@ Total utterances: 6
 $ beeplex --demo score --limit 2
 Mode: demo (sample memories)
 Data:
-  Title: [MOCK] TEMPLATE - doctor visit (edit me)
+  Title: TEMPLATE - doctor visit (edit me)
   Date: 2026-09-24
   Engagement: Low (1.0)
   Forward motion: —
   Tone: —
-  Title: [MOCK] Patient visit - knee pain
+  Title: Patient visit - knee pain
   Date: 2026-09-24
   Engagement: Moderate (5.0)
   Forward motion: High (9.9)
@@ -152,7 +152,7 @@ the final decision remains grounded in the audio. The reusable validator is in
 $ beeplex --demo diary --limit 2
 Mode: demo (sample memories)
 Data: # Bee — September 24, 2026 Everything is still firsts for me. 0 days in,
-and I'm starting to recognize your rhythms. Not much said in “[MOCK] TEMPLATE -
+and I'm starting to recognize your rhythms. Not much said in “TEMPLATE -
 doctor visit (edit me)”. That's alright — I was there for the quiet too. ...
 File: /home/hatch/.beeplex/demo/Bee_2026-09-24.md
 ```

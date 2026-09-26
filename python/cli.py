@@ -31,6 +31,7 @@ COMMANDS = {
     "diary": ("bee_diary", 3, "Write today's diary."),
     "profile": ("user_profile", 50, "Read or refresh the saved profile."),
     "doctor": (None, None, "Diagnose local setup."),
+    "ui": (None, None, "Open the local button-driven interface."),
 }
 
 
@@ -62,6 +63,10 @@ def add_subcommands(parser: argparse.ArgumentParser) -> None:
                 choices=range(1, 51),
                 metavar="1..50",
             )
+        if name == "ui":
+            sub.add_argument("--port", type=int, default=8765)
+            sub.add_argument("--no-browser", action="store_true")
+            continue
         if name == "voice":
             sub.add_argument("conversation_id")
         if name == "context":
@@ -153,6 +158,12 @@ def dispatch(args: argparse.Namespace) -> int:
 
     from . import server
     from .client import BeeError
+
+    if args.command == "ui":
+        from .web_ui import serve
+
+        serve(port=args.port, open_browser=not args.no_browser)
+        return 0
 
     kwargs = {
         key: value

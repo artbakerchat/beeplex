@@ -20,6 +20,19 @@ beeplex --demo conversations --limit 3
 beeplex --demo read sim_template_visit --limit 3
 ```
 
+For a button-driven interface in your browser, start the local UI from the
+repository folder:
+
+```powershell
+py -m python --demo ui
+```
+
+The UI opens in your browser and prints its local URL in the terminal. It
+normally uses `http://127.0.0.1:8765/`; if that port is busy, open the
+alternate URL printed there. Keep the terminal open while using the UI. Run
+the command again if you stop it. Omit `--demo` to use your Bee account. The
+UI listens only on this computer; press Ctrl+C in the terminal to stop it.
+
 If beeplex still isn’t on your PATH, a bare command won’t work yet. Path:
 
 $scripts = py -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user'))"

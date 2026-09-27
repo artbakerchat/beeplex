@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 import sys
 
@@ -37,6 +38,17 @@ def main() -> None:
     args = parser.parse_args()
     if args.command and (args.check or args.config):
         parser.error("--check and --config cannot be combined with a subcommand")
+
+    # Auto-fallback to demo so `beeplex context` works out of the box
+    if not getattr(args, "demo", False) and os.getenv("BEEPLEX_DEMO") != "1":
+        if not shutil.which(os.getenv("BEE_CLI", "bee")):
+            print("⚠️  Bee CLI not found → entering demo mode (sample memories only)", file=sys.stderr)
+            print("   Run `npm install -g @beeai/cli && bee login` for real data", file=sys.stderr)
+            os.environ["BEEPLEX_DEMO"] = "1"
+            os.environ["BEE_CLI"] = str(Path(__file__).with_name("demo_cli.py"))
+            # Mark for later use in CLI/doctor
+            args.demo = True
+
     if args.demo or os.getenv("BEEPLEX_DEMO") == "1":
         os.environ["BEEPLEX_DEMO"] = "1"
         # Demo is a fake CLI on the same subprocess path as the real one, not

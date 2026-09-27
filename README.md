@@ -10,7 +10,7 @@ See [`docs/host-agents.md`](docs/host-agents.md) for the philosophy.
 
 ## Features
 
-- **CLI** (`beeplex`): `status`, `now`, `search`, `conversations`, `todos`, `profile`, `report`, `diary`, `disagree`, `ui`
+- **CLI** (`beeplex`): `status`, `now`, `search`, `conversations`, `todos`, `profile`, `report`, `diary`, `disagree`, `voice`, `ui`
 - **MCP Server**: Native integration with MCP-compatible AI coding agents and tools
 - **Web UI** + Voice Editor for transcripts
 - **Independent analysis**: LLM scoring, temporal scoring, clinical extraction, disagreement detection between Bee summaries and local models
@@ -53,12 +53,16 @@ beeplex search "project deadline"
 # Open web interface
 beeplex ui
 
-# Generate report + disagreement view
-beeplex report
-beeplex disagree
+# Generate report + disagreement view + voice editor
+beeplex report          # dashboard.html + Office reports
+beeplex disagree        # disagreement.html
+beeplex voice           # voice/*.html (slack.html + per-conversation editors)
+beeplex --demo voice    # demo data version
 ```
 
 For full Bee CLI commands and detailed usage, see [`.agents/skills/bee-cli/SKILL.md`](.agents/skills/bee-cli/SKILL.md).
+
+`beeplex voice` creates self-contained HTML transcript editors (`family/voice/slack.html` + per-conversation pages) from Bee CLI data (or demo). `beeplex report` creates `dashboard.html` + Office files.
 
 ## Project Structure
 

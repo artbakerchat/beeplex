@@ -1,3 +1,18 @@
+print("\x1b[3mHello\x1b[23m World")
+
+Prompt caching = reusing a portion of your input instead of re-processing it from scratch.
+
+Your prompt is mostly stable across turns: system prompt, tool definitions, AGENTS.md, and the earlier conversation. That's usually 90%+ of the tokens sent every message. Providers let you mark that stable prefix as cacheable.
+
+Why it matters: re-reading tokens costs both money and time. A cached read is ~6x cheaper on Grok 4.20 ($0.20 vs $1.25) and comes back faster, which cuts latency on every request.
+
+How it works:
+1. The prefix must be byte-identical — same order, same bytes, no timestamps or random IDs in it. Change one character and the cache misses.
+2. The provider writes it to their storage with a TTL (minutes to an hour).
+3. A later request with the same prefix is served from that storage.
+The gotcha: if you reorder tools, edit a system prompt, or switch models mid-session, you miss the cache and pay full price until the new prefix is written.
+
+Where it shows up in your session: read the docs for your cache dir, then continue. First request writes the cache, subsequent ones hit it — and it'll show up as "cached" in your usage/credits view.
 
 + Thought: 2.6s
 - Thought: 2.6s

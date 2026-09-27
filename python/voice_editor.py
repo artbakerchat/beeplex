@@ -68,9 +68,9 @@ def editor_data(conversation):
 # at the repo root is the hand-maintained benchmark copy of this exact template:
 # any improvement made to slack.html must be ported here (keeping the
 # __TITLE__/__SUBTITLE__/__DATA__ placeholders), so every generated page --
-# single-conversation and aggregate -- ships the same design. The page adapts
-# itself at load: with one scenario the picker hides and the heading takes the
-# conversation's title.
+# single-conversation and aggregate -- ships the same design to family/voice/.
+# The page adapts itself at load: with one scenario the picker hides and the
+# heading takes the conversation's title.
 _VOICE_PAGE = r'''<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>__TITLE__</title>
@@ -393,7 +393,7 @@ def create_editor(conversation):
 
 
 def create_aggregate(conversations, limit=50):
-    """Write the multi-scenario editor page (slack.html) into the data folder's voice/.
+    """Write the multi-scenario editor page (slack.html) into family/voice/ (or family/demo/voice/ in demo mode).
 
     Covers every recording available in the current mode: all recent live
     conversations via the Bee CLI, or all demo conversations in demo mode.

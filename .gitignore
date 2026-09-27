@@ -29,4 +29,4 @@ node_modules/
 
 # Optional local MCP output
 data/
-.beeplex/
+# .beeplex/ (legacy default)

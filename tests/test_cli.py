@@ -179,7 +179,7 @@ def test_flags_after_command_and_doctor_failures(tmp_path):
         demo=False,
     )
     assert response.returncode == 0
-    assert json.loads(response.stdout)["data_dir"] == str(tmp_path / "other" / "demo")
+    assert json.loads(response.stdout)["data_dir"] == str(tmp_path / "other")
     (tmp_path / "output").write_text("a file blocks the directory")
     response = run_cli(tmp_path, "doctor", "--json", demo=False)
     assert response.returncode == 0

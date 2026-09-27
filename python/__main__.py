@@ -20,7 +20,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--data-dir",
-        help="Folder for reports, diary and profile (default: ~/.beeplex).",
+        help="Folder for reports, diary and profile (default: family).",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Beeplex user profile builder: maintain BEEPLEX_DATA_DIR/user.md.
+"""Beeplex user profile builder: maintain family/user.md (default data dir).
 
 Incrementally learns who the owner is from their Bee data and keeps a
 living profile (the skill's user.md workflow, adapted to beeplex):
@@ -11,11 +11,11 @@ living profile (the skill's user.md workflow, adapted to beeplex):
 * Bee's insights -> Interests & Hobbies (attributed: "Bee noticed")
 * frequent places -> Places
 
-State lives in BEEPLEX_DATA_DIR/profile_state.json: per-conversation aggregates,
+State lives in family/profile_state.json: per-conversation aggregates,
 processed ids, and the `changed` cursor. Each run gathers only what's
 new, then re-renders the whole user.md from state + fresh static data
 (facts/insights/journals/places are small and idempotent, so they're
-re-fetched every run). Both files stay local - BEEPLEX_DATA_DIR/ is gitignored -
+re-fetched every run). Both files stay local - family/ is gitignored -
 because a user profile is personal data, never committed.
 
 Extraction is deterministic and always runs. When an LLM provider is
@@ -495,7 +495,7 @@ def _render(state, static):
 
 
 def run_profile(full=False, limit=50):
-    """Build/update BEEPLEX_DATA_DIR/user.md. Returns (path, info)."""
+    """Build/update family/user.md. Returns (path, info)."""
     state = _load_state()
     if full:
         state = {
@@ -537,7 +537,7 @@ if __name__ == "__main__":
     import argparse
 
     ap = argparse.ArgumentParser(
-        description="Build/update BEEPLEX_DATA_DIR/user.md from Bee data."
+        description="Build/update family/user.md from Bee data."
     )
     ap.add_argument(
         "--full",

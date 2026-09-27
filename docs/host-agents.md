@@ -88,7 +88,7 @@ args = ["-m", "beeplex", "--demo"]
 
 [mcp_servers.beeplex_live]   # live — your real Bee data
 command = "/path/to/python"
-args = ["-m", "beeplex", "--data-dir", "/home/you/.beeplex"]
+args = ["-m", "beeplex"]  # defaults to ./family
 ```
 
 The host sees two tool sets and picks per request: "show me the demo"

@@ -2,7 +2,7 @@
 
 Report generation regenerates dashboard.html and - for
 live runs - appends that run's per-conversation scores to
-history.json in BEEPLEX_DATA_DIR. Read-only scoring does not write either file.
+history.json in family/ (default). Read-only scoring does not write either file.
 The history stores scores and signal values only,
 never transcripts. The dashboard shows:
 
@@ -458,7 +458,7 @@ footer{color:var(--muted);font-size:12px;margin:24px 0}
 <h2>Coaching</h2>
 <div id="cards"></div>
 
-<footer>Scores: deterministic (structure) + temporal (motion) + semantic (meaning, one Gemini call per run, needs API key). Engagement is the heat; forward motion is whether the heat cooks anything. History: the last __NRUNS__ runs, kept locally in <code>BEEPLEX_DATA_DIR/history.json</code>.</footer>
+<footer>Scores: deterministic (structure) + temporal (motion) + semantic (meaning, one Gemini call per run, needs API key). Engagement is the heat; forward motion is whether the heat cooks anything. History: the last __NRUNS__ runs, kept locally in <code>family/history.json</code> (default).</footer>
 </div>
 <script>
 var META=__RUN_META__;

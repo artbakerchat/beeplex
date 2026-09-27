@@ -652,7 +652,7 @@ def _fetch_impl(limit, *, persist=True):
     _enrich_rows(rows, pairs)
 
     # Coaching dashboard: append this run's scores to the local trend
-    # history and regenerate BEEPLEX_DATA_DIR/dashboard.html. Automatic on every
+    # history and regenerate family/dashboard.html (default). Automatic on every
     # run; record_run appends only for live mode, so demo runs regenerate the
     # page from history (demo banner) without touching history.
     from .dashboard import record_run

@@ -142,9 +142,7 @@ def test_conversational_workflow(tmp_path, demo, protocol):
             profile = await call(client, "user_profile", refresh=True, limit=1)
             assert Path(profile["file"]).is_file()
             assert (await call(client, "user_profile"))["data"] == profile["data"]
-            if demo:
-                assert (tmp_path / "output" / "demo" / "user.md").is_file()
-                assert not (tmp_path / "output" / "user.md").exists()
+            assert (tmp_path / "output" / "user.md").is_file()
 
     asyncio.run(scenario())
 

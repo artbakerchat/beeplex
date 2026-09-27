@@ -3,9 +3,9 @@
 Scoring reads HOW people talk, clinical reads WHAT was said, persona is
 WHO was listening. Bee has no default personality - it grows one from
 what it hears. ``derive_persona()`` is a pure function of the
-longitudinal history (``BEEPLEX_DATA_DIR/history.json``): the longer Bee listens,
+longitudinal history (family/history.json by default): the longer Bee listens,
 the more defined its character becomes. Scores give it the shape of your
-days; ``BEEPLEX_DATA_DIR/moments.json`` - one remembered line per conversation,
+days; family/moments.json - one remembered line per conversation,
 recorded on live runs - gives it something to actually remember about
 them. A Bee raised on dinner-table debates is wry and steady; one raised
 on quiet evenings is gentle and comfortable with silence. A brand-new Bee
@@ -13,7 +13,7 @@ is curious and tentative.
 
 The persona then speaks: ``run_persona()`` fetches today's
 conversations, renders a first-person diary entry in Bee's voice, and
-writes ``BEEPLEX_DATA_DIR/Bee_YYYY-MM-DD.md``. An LLM writes the entry when a
+writes family/Bee_YYYY-MM-DD.md (controlled by $BEEPLEX_DATA_DIR). An LLM writes the entry when a
 provider is configured (via the ``llm_scoring`` provider chain);
 otherwise deterministic templates carry the voice. Either way it stays
 Bee's.
@@ -49,8 +49,8 @@ def _mean(vals):
 def derive_persona(history, moments=None):
     """Derive Bee's grown personality from the listening history.
 
-    ``history`` is the ``BEEPLEX_DATA_DIR/history.json`` dict (``{"runs": [...]}``);
-    ``moments`` is the ``BEEPLEX_DATA_DIR/moments.json`` dict (``{"moments": [...]}``),
+    ``history`` is the family/history.json dict (``{"runs": [...]}`` by default);
+    ``moments`` is the family/moments.json dict (``{"moments": [...]}``),
     optional - without it keepsakes fall back to bare history titles.
     Returns a JSON-serializable persona dict: maturity, temperament,
     notices (learned habits), keepsakes (pocketed moments, each with its
@@ -239,12 +239,12 @@ def _moment_note(parts, bd):
 
 
 def record_moments(entries, ts):
-    """Append one memory per conversation to BEEPLEX_DATA_DIR/moments.json.
+    """Append one memory per conversation to family/moments.json.
 
     Called on live runs only - mock/demo runs never record. Each moment
     is a title plus a one-line note about what it was about; scores ride
     along so the persona can choose which moments to pocket. Local and
-    gitignored like everything in BEEPLEX_DATA_DIR/; never a transcript.
+    gitignored like everything in family/; never a transcript.
     """
     moments = _load_moments()
     for e in entries:
@@ -541,7 +541,7 @@ def run_persona(limit=3):
     """Persona mode: derive who Bee has become, write tonight's entry.
 
     Reading mode - fetches today's conversations but never appends to
-    the history. Writes BEEPLEX_DATA_DIR/Bee_YYYY-MM-DD.md and prints the entry.
+    the history. Writes family/Bee_YYYY-MM-DD.md and prints the entry.
     """
     from . import bee_fetcher as bf
     from .dashboard import _load_history

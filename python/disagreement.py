@@ -355,7 +355,7 @@ footer{color:var(--muted);font-size:12px;margin:24px 0}
 
 
 def render_html(view):
-    """Write the disagreement view to DATA_DIR/disagreement.html.
+    """Write the disagreement view to family/disagreement.html (default DATA_DIR).
 
     Returns the file path as a string. Pure presentational layer over the
     JSON view; safe to regenerate any time.

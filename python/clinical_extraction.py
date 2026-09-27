@@ -18,7 +18,7 @@ Two layers, same philosophy as the engagement pipeline:
 
 Privacy: deterministic mode sends nothing anywhere. The LLM pass sends
 transcript text to the configured provider - the same tradeoff as
-llm_scoring. Summaries land in BEEPLEX_DATA_DIR/, which is gitignored: never commit
+llm_scoring. Summaries land in family/ (default data dir, gitignored): never commit
 real patient transcripts.
 
 This is a hackathon demo aid, not a medical device. Deterministic output

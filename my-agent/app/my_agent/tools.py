@@ -37,9 +37,22 @@ def _beeplex():
         )
     if str(BEEPLEX_DIR) not in sys.path:
         sys.path.insert(0, str(BEEPLEX_DIR))
-    import bee_fetcher
-
-    return bee_fetcher
+    python_dir = BEEPLEX_DIR / "python"
+    if python_dir.is_dir() and str(python_dir) not in sys.path:
+        sys.path.insert(0, str(python_dir))
+    # Fallback to demo mode if Bee CLI is not installed
+    import shutil
+    if os.getenv("BEEPLEX_DEMO") != "1" and not shutil.which(os.getenv("BEE_CLI", "bee")):
+        demo_cli = python_dir / "demo_cli.py"
+        if demo_cli.is_file():
+            os.environ["BEEPLEX_DEMO"] = "1"
+            os.environ["BEE_CLI"] = str(demo_cli)
+    try:
+        from python import bee_fetcher
+        return bee_fetcher
+    except ImportError:
+        import bee_fetcher
+        return bee_fetcher
 
 
 def fetch_conversations_impl(limit: int = 5) -> str:
@@ -86,7 +99,7 @@ def score_conversations_impl(limit: int = 5) -> str:
 def generate_report_impl(limit: int = 10) -> str:
     """Generate the beeplex Word/Excel/PowerPoint reports into family/.
 
-    Runs family.py in the beeplex checkout, which fetches the latest
+    Runs report generation in the beeplex checkout, which fetches the latest
     conversations, scores them, and writes the transcript log (.docx),
     metrics spreadsheet (.xlsx), and insights deck (.pptx), plus regenerates
     the coaching dashboard (family/dashboard.html).
@@ -94,8 +107,9 @@ def generate_report_impl(limit: int = 10) -> str:
     _beeplex()  # validates BEEPLEX_DIR exists
     family_dir = BEEPLEX_DIR / "family"
     before = {p.name for p in family_dir.glob("*")} if family_dir.is_dir() else set()
+    cmd = [sys.executable, "-m", "python", "report", "--limit", str(limit)]
     proc = subprocess.run(
-        [sys.executable, "family.py"],
+        cmd,
         cwd=BEEPLEX_DIR,
         capture_output=True,
         text=True,
@@ -122,8 +136,9 @@ def bee_diary_impl(limit: int = 3) -> str:
     tonight's first-person diary entry to family/Bee_YYYY-MM-DD.md.
     """
     _beeplex()  # validates BEEPLEX_DIR exists
+    cmd = [sys.executable, "-m", "python", "diary", "--limit", str(limit)]
     proc = subprocess.run(
-        [sys.executable, "bee_fetcher.py", "--persona", "--limit", str(limit)],
+        cmd,
         cwd=BEEPLEX_DIR,
         capture_output=True,
         text=True,
@@ -134,7 +149,7 @@ def bee_diary_impl(limit: int = 3) -> str:
     path = BEEPLEX_DIR / "family" / f"Bee_{date.today().isoformat()}.md"
     if not path.is_file():
         return "Diary ran but no entry file was written."
-    return path.read_text()
+    return path.read_text(encoding="utf-8")
 
 
 def user_profile_impl(full: bool = False, limit: int = 50) -> str:
@@ -146,9 +161,12 @@ def user_profile_impl(full: bool = False, limit: int = 50) -> str:
     journals, places). Returns the profile text itself.
     """
     _beeplex()  # validates BEEPLEX_DIR exists
-    if str(BEEPLEX_DIR) not in sys.path:
-        sys.path.insert(0, str(BEEPLEX_DIR))
-    import profile
+    try:
+        from python import profile
+    except ImportError:
+        if str(BEEPLEX_DIR) not in sys.path:
+            sys.path.insert(0, str(BEEPLEX_DIR))
+        import profile
 
     path, info = profile.run_profile(full=full, limit=limit)
     header = (
@@ -157,4 +175,4 @@ def user_profile_impl(full: bool = False, limit: int = 50) -> str:
         f"facts={info['facts']}\n"
         f"--- {path} ---\n"
     )
-    return header + Path(path).read_text()
+    return header + Path(path).read_text(encoding="utf-8")

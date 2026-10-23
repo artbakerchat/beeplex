@@ -64,11 +64,12 @@ def editor_data(conversation):
     }
 
 
-# _VOICE_PAGE is the single canonical editor design. The checked-in slack.html
-# at the repo root is the hand-maintained benchmark copy of this exact template:
-# any improvement made to slack.html must be ported here (keeping the
-# __TITLE__/__SUBTITLE__/__DATA__ placeholders), so every generated page --
-# single-conversation and aggregate -- ships the same design to family/voice/.
+# _VOICE_PAGE is the single canonical editor design (the old hand-maintained
+# slack.html benchmark copy was deleted from the repo on 2026-09-27; this
+# template is now the sole source of truth). Any design change goes here
+# (keeping the __TITLE__/__SUBTITLE__/__DATA__ placeholders), so every
+# generated page -- single-conversation and aggregate -- ships the same
+# design to family/voice/.
 # The page adapts itself at load: with one scenario the picker hides and the
 # heading takes the conversation's title.
 _VOICE_PAGE = r'''<!doctype html>

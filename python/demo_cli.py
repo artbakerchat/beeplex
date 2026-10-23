@@ -22,7 +22,7 @@ _MINUTE = 60_000
 
 
 # --- sample dataset ------------------------------------------------------
-# The nine simulator scenarios (simulator/conversations.json) are the single
+# The twelve simulator scenarios (simulator/conversations.json) are the single
 # source of truth for demo data -- the same scenarios behind the voice
 # editor's aggregate page and the scoring benchmark. Demo mode is identified
 # separately so sample content stays readable.

@@ -191,7 +191,7 @@ def test_all_simulator_conversations_score_without_writing(tmp_path):
         async with connect(tmp_path) as client:
             conversations = await call(client, "fetch_conversations", limit=50)
             scores = await call(client, "score_conversations", limit=50)
-            assert len(scores["data"]) == len(conversations["data"]) == 9
+            assert len(scores["data"]) == len(conversations["data"]) == 12
             assert not (tmp_path / "output").exists()
 
     asyncio.run(scenario())
